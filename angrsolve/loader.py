@@ -35,7 +35,7 @@ def resolve_address(
 
     if isinstance(target, int):
         addr = target
-        if is_pie and addr < proj.loader.main_object.max_addr:
+        if is_pie and addr < proj.loader.main_object.min_addr:
             addr += proj.loader.main_object.min_addr
         return addr
 
@@ -50,7 +50,7 @@ def resolve_address(
         logger.error("Could not resolve target: %s", target)
         return None
 
-    if is_pie:
+    if is_pie and addr < proj.loader.main_object.min_addr:
         addr += proj.loader.main_object.min_addr
     logger.info("[+] Target resolved: %s -> 0x%x", target, addr)
     return addr

@@ -27,6 +27,13 @@ Requires Python 3.8+ and angr 9.2+. See [DOCS.md](DOCS.md) for detailed docs.
 - **Output** — ASCII/hex/Python/escaped; JSON mode; save to file
 - **Performance** — Unicorn engine, veritesting, configurable timeout/depth/active limits
 
+## Challenges solved
+
+| Challenge | Platform | Difficulty | Input type |
+|-----------|----------|-----------|------------|
+| Gatekeeper | picoCTF | medium | stdin |
+| file-run2  | picoCTF | medium | argv  |
+
 ## Documentation
 
 Full documentation and examples are in [DOCS.md](DOCS.md).
