@@ -33,6 +33,8 @@ Requires Python 3.8+ and angr 9.2+. See [DOCS.md](DOCS.md) for detailed docs.
 |-----------|----------|-----------|------------|
 | Gatekeeper | picoCTF | medium | stdin |
 | file-run2  | picoCTF | medium | argv  |
+| Bbbbloat   | picoCTF | medium | stdin |
+| Keygenme   | picoCTF | hard   | stdin |
 
 ## Documentation
 

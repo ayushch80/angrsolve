@@ -179,7 +179,6 @@ def explore(
         logger.info("[+] Unicorn engine enabled")
         state.options.add(angr.options.UNICORN)
         state.options.add(angr.options.UNICORN_HANDLE_SYMBOLIC_SYSCALLS)
-        state.options.add(angr.options.UNICORN_SYM_SYSCALL_RESOLVER)
 
     simgr = proj.factory.simulation_manager(state, veritesting=cfg.veritesting)
 
@@ -228,6 +227,8 @@ def explore(
         logger.info("[!] Exploration timed out after %.1f s", cfg.timeout)
     except KeyboardInterrupt:
         logger.info("[!] Interrupted by user")
+    except Exception as e:
+        logger.info("[!] Exploration error: %s", e)
     finally:
         if cfg.timeout is not None:
             signal.alarm(0)
