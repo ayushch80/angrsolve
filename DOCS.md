@@ -318,15 +318,15 @@ By default, angrsolve prints a formatted solution:
 ```
 ✓ Solution found!
 
-  Target: win (0x4011d6)
+  Target: 0x401149
 
-  STDIN:
-    ASCII:  password123
-    HEX:    70617373776f7264313233
-    Python: b"password123"
-    Escaped: password123
+  ARGV:
+    ASCII:  s3cr3t
+    HEX:    733363723374
+    Python: b's3cr3t'
+    Escaped: s3cr3t
 
-  Explored states: 86  |  Active states: 0  |  Time: 1423.5 ms
+  Explored states: 1  |  Active states: 0  |  Time: 11744.7 ms
 ```
 
 The solution displays:
@@ -341,10 +341,10 @@ Each data source is shown in four formats:
 
 | Format | Example |
 |--------|---------|
-| ASCII | `password123` |
-| HEX | `70617373776f7264313233` |
-| Python | `b"password123"` |
-| Escaped | `password123` |
+| ASCII | `s3cr3t` |
+| HEX | `733363723374` |
+| Python | `b's3cr3t'` |
+| Escaped | `s3cr3t` |
 
 ### JSON Output
 
@@ -354,14 +354,14 @@ python angrsolve.py ./chall --find win --stdin 64 --json
 
 ```json
 {
-  "find_addr": "0x4011d6",
-  "find_name": "win",
-  "stdin": "70617373776f7264313233",
-  "argv": null,
+  "find_addr": "0x401149",
+  "find_name": null,
+  "stdin": null,
+  "argv": "733363723374",
   "files": {},
   "active_states": 0,
-  "explored_states": 86,
-  "timing_ms": 1423.5
+  "explored_states": 1,
+  "timing_ms": 8819.5
 }
 ```
 
@@ -412,19 +412,10 @@ Third-party loggers (angr, claripy, pyvex, archinfo):
 Find the argv[1] that reaches `win`:
 
 ```bash
-$ python angrsolve.py ./chall --find win --argv 32
-[+] Loading binary: ./chall
-[+] Target resolved: win -> 0x4011d6
-[+] Creating symbolic stdin (size=128)
-[+] Creating symbolic argv (size=32)
-[+] Beginning exploration
-[*] Step 100 | active=2, found=0, deadended=34, avoided=0
-[*] Step 200 | active=1, found=0, deadended=78, avoided=0
-[+] Solution found
-
+$ python angrsolve.py ./chall --find win --argv 32 -q
 ✓ Solution found!
 
-  Target: win (0x4011d6)
+  Target: 0x401149
 
   ARGV:
     ASCII:  s3cr3t
@@ -432,7 +423,7 @@ $ python angrsolve.py ./chall --find win --argv 32
     Python: b's3cr3t'
     Escaped: s3cr3t
 
-  Explored states: 79  |  Active states: 0  |  Time: 4234.2 ms
+  Explored states: 1  |  Active states: 0  |  Time: 11744.7 ms
 ```
 
 ### Basic stdin
@@ -440,17 +431,109 @@ $ python angrsolve.py ./chall --find win --argv 32
 Find the stdin input that reaches `win`:
 
 ```bash
-$ python angrsolve.py ./chall --find win --stdin 64
-[+] Loading binary: ./chall
-[+] Target resolved: win -> 0x4011d6
-[+] Creating symbolic stdin (size=64)
-[+] Beginning exploration
-[*] Step 100 | active=12, found=0, deadended=34, avoided=2
-[+] Solution found
-
+$ python angrsolve.py ./chall --find win --stdin 64 -q
 ✓ Solution found!
 
-  Target: win (0x4011d6)
+  Target: 0x401169
+
+  STDIN:
+    ASCII:  s3cr3t
+    HEX:    733363723374
+    Python: b's3cr3t'
+    Escaped: s3cr3t
+
+  Explored states: 1  |  Active states: 0  |  Time: 5523.6 ms
+```
+
+### File-based input
+
+Find the contents of `creds.txt` that reach `win`:
+
+```bash
+$ python angrsolve.py ./chall --find win --file creds.txt 64 -q
+✓ Solution found!
+
+  Target: 0x401189
+
+  FILE [creds.txt]:
+    ASCII:  admin:secret
+    HEX:    61646d696e3a736563726574
+    Python: b'admin:secret'
+    Escaped: admin:secret
+
+  Explored states: 2  |  Active states: 1  |  Time: 7010.4 ms
+```
+
+### PIE binary
+
+PIE binaries work the same way — the base address is added automatically:
+
+```bash
+$ python angrsolve.py ./chall --find win --argv 32 -q
+✓ Solution found!
+
+  Target: 0x401149
+
+  ARGV:
+    ASCII:  secret
+    HEX:    736563726574
+    Python: b'secret'
+    Escaped: secret
+
+  Explored states: 2  |  Active states: 0  |  Time: 11618.0 ms
+```
+
+### Stripped binary
+
+Stripped binaries have no symbol table, so use a raw address with `--find`:
+
+```bash
+$ python angrsolve.py ./chall --find 0x401156 --stdin 32 -q
+✓ Solution found!
+
+  Target: 0x401156
+
+  STDIN:
+    ASCII:  s3cr3t
+    HEX:    733363723374
+    Python: b's3cr3t'
+    Escaped: s3cr3t
+
+  Explored states: 2  |  Active states: 1  |  Time: 2558.6 ms
+```
+
+Note: `--argv` mode requires a `main` symbol for call_state setup, so `--stdin` is preferred for stripped binaries.
+
+### Integer comparison
+
+Challenges that check integer values work the same way:
+
+```bash
+$ python angrsolve.py ./chall --find win --stdin 4 -q
+✓ Solution found!
+
+  Target: 0x401149
+
+  STDIN:
+    ASCII:  0000001337
+    HEX:    30303030303031333337
+    Python: b'0000001337'
+    Escaped: 0000001337
+
+  Explored states: 2  |  Active states: 1  |  Time: 946.6 ms
+```
+
+The solver pads small inputs to fill the buffer size.
+
+### Multiple checks
+
+For binaries that check both argv[1] and stdin:
+
+```bash
+$ python angrsolve.py ./chall --find win --stdin 32 --argv 32
+✓ Solution found!
+
+  Target: 0x401169
 
   STDIN:
     ASCII:  p4ssw0rd
@@ -458,94 +541,37 @@ $ python angrsolve.py ./chall --find win --stdin 64
     Python: b'p4ssw0rd'
     Escaped: p4ssw0rd
 
-  Explored states: 86  |  Active states: 8  |  Time: 1423.5 ms
+  ARGV:
+    ASCII:  s3cr3t
+    HEX:    733363723374
+    Python: b's3cr3t'
+    Escaped: s3cr3t
+
+  Explored states: 3  |  Active states: 1  |  Time: 4808.7 ms
 ```
 
-### File-based input
-
-Find the contents of `flag.txt` that reach `win`:
-
-```bash
-$ python angrsolve.py ./chall --find win --file flag.txt 64
-[+] Loading binary: ./chall
-[+] Target resolved: win -> 0x4011d6
-[+] Creating symbolic file 'flag.txt' (size=64)
-[+] Beginning exploration
-[*] Step 100 | active=3, found=0, deadended=12, avoided=0
-[+] Solution found
-
-✓ Solution found!
-
-  Target: win (0x4011d6)
-
-  FILE [flag.txt]:
-    ASCII:  admin:secret
-    HEX:    61646d696e3a736563726574
-    Python: b'admin:secret'
-    Escaped: admin:secret
-
-  Explored states: 41  |  Active states: 0  |  Time: 2134.1 ms
-```
-
-### PIE binary
-
-PIE binaries work identically — the base address is added automatically:
-
-```bash
-$ python angrsolve.py ./chall-pie --find win --argv 32
-[+] Loading binary: ./chall-pie
-[+] Target resolved: win -> 0x555555555189
-# ...
-```
-
-### Stripped binary
-
-For stripped binaries, use the raw address or find it via trial:
-
-```bash
-$ python angrsolve.py ./chall-stripped --find 0x1189 --argv 32
-# ...
-```
-
-Symbol-based lookups will fail on stripped binaries (the symbol table has been removed), but hex addresses and auto-detection via the `win`/`success` etc. heuristic will also fail.
-
-### Integer comparison
-
-Challenges that check integer values (not strings) work the same way:
-
-```bash
-$ python angrsolve.py ./chall --find win --stdin 4
-```
-
-The solver will find integer byte values that pass the check.
-
-### memcmp challenge
-
-For binaries using `memcmp` instead of `strcmp`:
-
-```bash
-$ python angrsolve.py ./chall --find win --argv 32
-```
-
-`memcmp` is handled symbolically the same as `strcmp` by angr's SimProcedures.
-
-### Multiple checks
-
-For binaries that check multiple conditions:
-
-```bash
-$ python angrsolve.py ./chall --find win --stdin 64
-```
-
-The solver automatically finds input that passes all checks simultaneously.
+The solver finds input that passes all checks simultaneously.
 
 ### Custom byte constraints
 
 Use `--mode unrestricted` for non-printable payloads:
 
 ```bash
-$ python angrsolve.py ./chall --find win --stdin 16 --mode unrestricted
+$ python angrsolve.py ./chall --find win --stdin 16 --mode unrestricted -q
+✓ Solution found!
+
+  Target: 0x401169
+
+  STDIN:
+    ASCII:  s3cr3t
+    HEX:    733363723374
+    Python: b's3cr3t'
+    Escaped: s3cr3t
+
+  Explored states: 1  |  Active states: 0  |  Time: 1020.0 ms
 ```
+
+Other built-in modes: `alphanumeric`, `letters`, `digits`.
 
 ### JSON output
 
@@ -554,14 +580,14 @@ Machine-readable output:
 ```bash
 $ python angrsolve.py ./chall --find win --argv 32 --json
 {
-  "find_addr": "0x4011d6",
-  "find_name": "win",
+  "find_addr": "0x401149",
+  "find_name": null,
   "stdin": null,
   "argv": "733363723374",
   "files": {},
   "active_states": 0,
-  "explored_states": 79,
-  "timing_ms": 4234.2
+  "explored_states": 1,
+  "timing_ms": 8819.5
 }
 ```
 
