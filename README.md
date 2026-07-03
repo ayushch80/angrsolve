@@ -1,6 +1,6 @@
 # angrsolve
 
-A production-quality Python tool that automatically solves simple reverse engineering and CTF binaries using [angr](https://angr.io/) symbolic execution.
+A Python tool that automatically solves simple reverse engineering and CTF binaries using [angr](https://angr.io/) symbolic execution.
 
 ```bash
 python angrsolve.py ./chall --find win           # auto stdin

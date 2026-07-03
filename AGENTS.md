@@ -23,8 +23,13 @@ tests/                      # Test suite
 ├── test_inputs.py
 ├── test_explorer.py
 ├── test_integration.py
-└── test_binaries.py               # 26 tests: compiles C → ELF → solves
+└── test_binaries.py         # 26 tests: compiles C → ELF → solves
+.githooks/
+└── pre-commit              # Syntax check hook (py_compile on staged .py files)
+.github/workflows/
+└── ci.yml                  # GitHub Actions: lint, unit-tests, integration-tests
 AGENTS.md                   # This file
+DOCS.md                     # Full documentation
 README.md
 requirements.txt
 ```
@@ -47,7 +52,7 @@ pytest -v tests/test_integration.py
 # Run binary compilation tests (requires gcc)
 pytest -v tests/test_binaries.py
 
-# Run fast unit tests only (no angr dependency)
+# Run fast unit tests only
 pytest -v tests/test_utils.py tests/test_constraints.py tests/test_cli.py tests/test_output.py
 
 # Check syntax without running
@@ -88,6 +93,8 @@ Three parallel jobs run on every push/PR:
 - **File extraction**: Saves `sym_content` reference at creation time, extracts from that after exploration. Direct `SimFile.content` access doesn't survive reads.
 - **Constraints**: Range-based `claripy.And(bv >= lo, bv <= hi)` per contiguous range, not OR-chain per byte value. This avoids solver slowdown from huge OR chains.
 - **Timeout**: SIGALRM-based hard kill (`signal.alarm(int(timeout) + 1)`). The `_timeout_handler` raises `TimeoutError` caught in `explore()`.
+- **Meaningful filter**: `_meaningful()` checks extracted data is >= 80 % printable and contains non-`?` bytes — suppresses solver noise from unused input sources.
+- **Auto stdin for argv**: When `--argv` is used, stdin (128 bytes) is always created so programs reading from stdin get constrained symbolic data. 
 
 ## Adding a Feature
 
