@@ -82,6 +82,15 @@ def setup_input(
         else:
             state = proj.factory.entry_state()
 
+        # Overwrite the return address so main() dead-ends cleanly
+        # instead of jumping to an unmapped region (default call_state
+        # behaviour) that crashes veritesting.
+        state.memory.store(state.regs.rsp, claripy.BVV(0, 64), endness="Iend_LE")
+
+        # Make rbp concrete so that rbp-relative memory accesses
+        # (local variables) don't trigger solver evaluation.
+        state.regs.rbp = state.regs.rsp
+
         # Build symbolic argv[1].
         sym_vals = [claripy.BVS(f"argv_1_{i}", 8) for i in range(argv_size)]
         argv_string = claripy.Concat(*sym_vals, claripy.BVV(0, 8))

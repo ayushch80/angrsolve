@@ -191,6 +191,7 @@ Byte constraints limit the values that each symbolic byte can take. This reduces
 | `alphanumeric` | `[a-zA-Z0-9]` + null byte | Password fields, alphanumeric-only checks |
 | `letters` | `[a-zA-Z]` + null byte | Alphabetic passwords |
 | `digits` | `[0-9]` + null byte | PIN codes, numeric input |
+| `hex` | `[0-9a-f]` + null byte (0x00) | Hex-only passwords, hex digit challenges |
 | `unrestricted` | All 256 byte values | Binary data, non-printable payloads |
 
 The null byte (0x00) is included in all restricted modes because symbolic strings need a terminator to satisfy string comparison functions like `strcmp`.

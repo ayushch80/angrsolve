@@ -88,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["printable", "alphanumeric", "letters", "digits", "unrestricted"],
+        choices=["printable", "alphanumeric", "letters", "digits", "hex", "unrestricted"],
         default="printable",
         help="Byte constraint mode (default: printable)",
     )

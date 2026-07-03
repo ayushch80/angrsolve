@@ -57,6 +57,11 @@ class ConstraintConfig:
             s = set(string.digits.encode("ascii"))
             s.add(0x00)
             return s
+        if self.mode == "hex":
+            s = set(bytes(range(0x30, 0x3a)))   # 0-9
+            s.update(bytes(range(0x41, 0x47)))  # A-F
+            s.update(bytes(range(0x61, 0x67)))  # a-f
+            return s
         if self.mode == "unrestricted":
             return set(range(256))
         return set(string.printable.encode("ascii"))
