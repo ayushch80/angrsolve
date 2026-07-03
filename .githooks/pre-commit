@@ -1,0 +1,11 @@
+#!/bin/sh
+# Pre-commit hook: syntax-check all Python files
+set -e
+
+PY_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$' || true)
+if [ -z "$PY_FILES" ]; then
+    exit 0
+fi
+
+echo "Checking syntax: $PY_FILES"
+python3 -m py_compile $PY_FILES
