@@ -44,17 +44,30 @@ pytest -v -s tests/test_explorer.py
 # Run end-to-end tests only (slowest)
 pytest -v tests/test_integration.py
 
+# Run binary compilation tests (requires gcc)
+pytest -v tests/test_binaries.py
+
 # Run fast unit tests only (no angr dependency)
 pytest -v tests/test_utils.py tests/test_constraints.py tests/test_cli.py tests/test_output.py
 
 # Check syntax without running
 python3 -m py_compile angrsolve/__init__.py angrsolve/cli.py angrsolve/constraints.py \
   angrsolve/explorer.py angrsolve/inputs.py angrsolve/loader.py angrsolve/output.py \
-  angrsolve/utils.py
+  angrsolve/utils.py angrsolve.py
 
 # Run a quick smoke test
 python3 angrsolve.py /tmp/test_argv_bin --find win --argv 32 --no-color -q
 ```
+
+## GitHub Actions (`.github/workflows/ci.yml`)
+
+Three parallel jobs run on every push/PR:
+
+| Job | What it runs | Approx time |
+|-----|-------------|-------------|
+| `lint` | `python3 -m py_compile` on every `.py` file | 10 s |
+| `unit-tests` | Fast tests (utils, constraints, cli, output) | 10 s |
+| `integration-tests` | Loader, input setup, exploration + auto-created test binaries | 2 min |
 
 ## Code Conventions
 

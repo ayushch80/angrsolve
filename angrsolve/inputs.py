@@ -107,9 +107,12 @@ def setup_input(
         for c in constraints:
             state.solver.add(c)
 
-        # Also set up stdin if requested.
-        if has_stdin:
-            _create_stdin(state, stdin_size, cfg)
+        # Always set up stdin so programs that read from stdin (fgets etc.)
+        # get properly constrained symbolic data rather than unconstrained
+        # filler.  This ensures strcmp constraints carry back to extraction.
+        if stdin_size == 0:
+            stdin_size = 128
+        _create_stdin(state, stdin_size, cfg)
     else:
         state = proj.factory.entry_state()
         if has_stdin:

@@ -188,19 +188,34 @@ def explore(
         timing_ms=elapsed,
     )
 
+    # Extract payloads from all possible input sources.
+    # Since we auto-create stdin when --argv is used, a program that reads
+    # from stdin will have constrained data there; the explicitly requested
+    # source may still be unconstrained filler.  We suppress extraction
+    # results that are mostly control characters (solver noise).
+    def _meaningful(data: bytes) -> bool:
+        if len(data) < 2:
+            return False
+        n_printable = sum(1 for b in data if 32 <= b < 127)
+        # Require at least 80 % printable bytes and at least one char
+        # that is not `?` (0x3F – common solver filler).
+        if n_printable < len(data) * 0.8:
+            return False
+        return any(32 <= b < 127 and b != 0x3F for b in data)
+
     if input_setup.stdin_size > 0:
         data = _extract_stdin(s, input_setup.stdin_size)
-        if data is not None:
+        if data is not None and _meaningful(data):
             sol.stdin = data
 
     if input_setup.argv_size > 0 and input_setup.argv_addr is not None:
         data = _extract_argv_from_mem(s, input_setup.argv_addr, input_setup.argv_size)
-        if data is not None:
+        if data is not None and _meaningful(data):
             sol.argv = data
 
     for sf in input_setup.files:
         data = _extract_file(s, sf)
-        if data is not None:
+        if data is not None and _meaningful(data):
             sol.files[sf.filename] = data
 
     logger.info("[+] Solution found")
