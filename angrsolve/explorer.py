@@ -53,7 +53,12 @@ def _extract_stdin(state: angr.SimState, size: int) -> Optional[bytes]:
         content_list = rs.content
         if not content_list:
             return None
-        sym_data = content_list[0][0]
+        # Concatenate all reads (handles both single fgets and repeated
+        # getchar() calls).
+        if len(content_list) == 1:
+            sym_data = content_list[0][0]
+        else:
+            sym_data = claripy.Concat(*(c[0] for c in content_list))
         raw = state.solver.eval(sym_data, cast_to=bytes)
         null_idx = raw.find(b"\x00")
         return raw[:null_idx] if null_idx >= 0 else raw
