@@ -53,6 +53,7 @@ class Solution:
     stdin: Optional[bytes] = None
     argv: Optional[bytes] = None
     files: Dict[str, bytes] = field(default_factory=dict)
+    generic: Optional[bytes] = None
     active_states: int = 0
     explored_states: int = 0
     timing_ms: float = 0.0
@@ -64,6 +65,7 @@ class Solution:
             "stdin": self.stdin.hex() if self.stdin else None,
             "argv": self.argv.hex() if self.argv else None,
             "files": {k: v.hex() for k, v in self.files.items()},
+            "generic": self.generic.hex() if self.generic else None,
             "active_states": self.active_states,
             "explored_states": self.explored_states,
             "timing_ms": self.timing_ms,
@@ -104,6 +106,9 @@ def format_solution_text(solution: Solution) -> str:
     if solution.argv is not None:
         _dump("ARGV", solution.argv)
 
+    if solution.generic is not None:
+        _dump("GENERIC", solution.generic)
+
     for fname, data in solution.files.items():
         _dump(f"FILE [{fname}]", data)
 
@@ -132,6 +137,8 @@ def output_solution(
             payload = solution.stdin
         elif solution.argv is not None:
             payload = solution.argv
+        elif solution.generic is not None:
+            payload = solution.generic
         elif solution.files:
             payload = next(iter(solution.files.values()))
 

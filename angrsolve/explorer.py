@@ -97,6 +97,68 @@ def _extract_file(state: angr.SimState, sf: SymbolicFile) -> Optional[bytes]:
         return None
 
 
+def _extract_general(state: angr.SimState) -> Optional[bytes]:
+    """Fallback: find printable memory from constrained BVS variables.
+
+    Covers binaries that read from uninitialized local buffers (e.g.
+    ``char buf[64]``) that angr fills symbolically.  Looks for
+    ``mem_<hexaddr>_<id>_<size>`` variables in solver constraints
+    and reads the concrete bytes from the state.
+    """
+    import re
+    try:
+        mem_addrs: List[int] = []
+        for c in state.solver.constraints:
+            for leaf in c.leaf_asts():
+                if leaf.op == "BVS":
+                    m = re.match(r"mem_([0-9a-f]+)_\d+_\d+", leaf.args[0])
+                    if m:
+                        addr = int(m.group(1), 16)
+                        mem_addrs.append(addr)
+        if not mem_addrs:
+            return None
+        mem_addrs = sorted(set(mem_addrs))
+        # Find the longest contiguous run of addresses.
+        best: Optional[bytes] = None
+        best_len = 0
+        run_start = mem_addrs[0]
+        prev = mem_addrs[0]
+        for addr in mem_addrs[1:]:
+            if addr != prev + 1:
+                # End of a run, evaluate it.
+                length = prev - run_start + 1
+                if length >= best_len:
+                    try:
+                        data = state.solver.eval(
+                            state.memory.load(run_start, length), cast_to=bytes
+                        )
+                    except Exception:
+                        data = b""
+                    null_idx = data.find(b"\x00")
+                    candidate = data[:null_idx] if null_idx >= 0 else data
+                    if len(candidate) > best_len:
+                        best = candidate
+                        best_len = len(candidate)
+                run_start = addr
+            prev = addr
+        # Evaluate the last run.
+        length = prev - run_start + 1
+        if length >= best_len:
+            try:
+                data = state.solver.eval(
+                    state.memory.load(run_start, length), cast_to=bytes
+                )
+            except Exception:
+                data = b""
+            null_idx = data.find(b"\x00")
+            candidate = data[:null_idx] if null_idx >= 0 else data
+            if len(candidate) > best_len:
+                best = candidate
+        return best
+    except Exception:
+        return None
+
+
 def explore(
     proj: angr.Project,
     input_setup: InputSetup,
@@ -222,6 +284,14 @@ def explore(
         data = _extract_file(s, sf)
         if data is not None and _meaningful(data):
             sol.files[sf.filename] = data
+
+    # Fallback: if no standard source produced data, scan stack memory
+    # for constrained symbolic bytes (programs that read from uninitialized
+    # local buffers, e.g. char buf[64] filled by angr's symbolic memory).
+    if not sol.stdin and not sol.argv and not sol.files:
+        data = _extract_general(s)
+        if data is not None and _meaningful(data):
+            sol.generic = data
 
     logger.info("[+] Solution found")
     return sol
