@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from angrsolve.cfgview import Accordion, Snapshot, fit_cells, make_observer
+from angrsolve.cfgview import Accordion, Snapshot, format_line, make_observer, render_lines
 
 
 class TestAccordion:
@@ -27,25 +27,44 @@ class TestAccordion:
         acc.collapse(1)
         assert acc.expanded == {0: 0}
 
-    def test_move_remembers_cursor(self) -> None:
-        acc = Accordion()
-        acc.move(2, 5)
-        assert acc.cursor[2] == 5
+
+class TestRenderLines:
+    ADJ = {0x100: [0x110, 0x120], 0x110: [0x111, 0x112], 0x120: []}
+
+    def test_collapsed_hides_children(self) -> None:
+        lines = render_lines(0x100, self.ADJ, {})
+        assert [(a) for _, _, a, _, _ in lines] == [0x100]
+
+    def test_expand_unfolds_one_path(self) -> None:
+        lines = render_lines(0x100, self.ADJ, {0: 0, 1: 0})
+        addrs = [a for _, _, a, _, _ in lines]
+        assert addrs == [0x100, 0x110, 0x111, 0x112, 0x120]
+
+    def test_sibling_switch(self) -> None:
+        lines = render_lines(0x100, self.ADJ, {0: 0, 1: 1})
+        addrs = [a for _, _, a, _, _ in lines]
+        assert addrs == [0x100, 0x110, 0x120]
+
+    def test_continuation_flags(self) -> None:
+        lines = render_lines(0x100, self.ADJ, {0: 0, 1: 0})
+        by_addr = {a: (last, cont) for _, _, a, last, cont in lines}
+        assert by_addr[0x110] == (False, (False,))
+        assert by_addr[0x111] == (False, (False, True))
+        assert by_addr[0x120] == (True, (False,))
 
 
-class TestFitCells:
-    def test_fits_unchanged(self) -> None:
-        cells = ["0x1", "0x2"]
-        assert fit_cells(cells, 0, 80) == (cells, 0)
+class TestFormatLine:
+    def test_truncates_to_width(self) -> None:
+        text = format_line(0x1234, "F●", 3, False, False, (True,), 10)
+        assert len(text) == 10
 
-    def test_truncates_keeps_selection(self) -> None:
-        cells = [f"0x{i:04x}" for i in range(20)]
-        shown, offset = fit_cells(cells, 19, 30)
-        assert "0x0013" in shown[-1]
-        assert offset > 0
+    def test_collapsed_shows_kid_count(self) -> None:
+        text = format_line(0x120, "", 3, False, True, (False,), 60)
+        assert text.endswith("▸+3")
 
-    def test_empty(self) -> None:
-        assert fit_cells([], 0, 80) == ([], 0)
+    def test_expanded_hides_kid_count(self) -> None:
+        text = format_line(0x110, "", 2, True, False, (False,), 60)
+        assert "▸" not in text
 
 
 class TestObserver:
