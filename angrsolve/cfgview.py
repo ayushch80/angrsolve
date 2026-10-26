@@ -8,6 +8,8 @@ exploration:
 
     ``●`` active state here   ``·`` visited   ``F`` find target
     ``A`` avoid target        dimmed = subtree fully exhausted (dead)
+    ``⟲→ADDR`` = repeating state (a loop back-edge to ancestor ADDR;
+    the latch and its straight-line parents render in the loop color)
 
 Keys: ↑/↓ or k/j move, ←/→ or h/l siblings, Enter/Space expand the
 selected block, Backspace folds it (or jumps to its parent when already
@@ -77,17 +79,23 @@ def render_lines(
         cont: tuple,
         parent: Optional[int],
         branch: int,
+        path: frozenset = frozenset(),
     ) -> None:
         lines.append((level, sib_idx, addr, last, cont, parent, branch))
         kids = adj.get(addr, [])
         kid_cont_base = cont + (not last,)
-        if addr in expanded:
+        # Never descend into an address already on the current path:
+        # CFGs contain cycles, and expanding along one must terminate.
+        # The repeated block renders as a collapsed child line, which is
+        # exactly where the loop marker points.
+        if addr in expanded and addr not in path:
+            path = path | {addr}
             for i, k in enumerate(kids):
                 # A child's continuation segments describe its ancestors:
                 # the parent contributes only if it has a following sibling.
                 rec(
                     k, level + 1, i, i == len(kids) - 1, kid_cont_base,
-                    addr, branch if level > 0 else i,
+                    addr, branch if level > 0 else i, path,
                 )
         else:
             for i, k in enumerate(kids):
@@ -144,18 +152,78 @@ class Snapshot:
     current_input: Optional[dict] = None
 
 
-def expand_with_ancestors(acc: Accordion, lines: List[tuple], addr: int) -> None:
-    """Expand a node and every folded ancestor up to the root.
+def _parent_indices(lines: List[tuple]) -> List[Optional[int]]:
+    """Map each line to its parent line (preorder: nearest level-1)."""
+    parent_idx: List[Optional[int]] = []
+    stack: List[int] = []
+    for i, ln in enumerate(lines):
+        while stack and lines[stack[-1]][0] >= ln[0]:
+            stack.pop()
+        parent_idx.append(stack[-1] if stack else None)
+        stack.append(i)
+    return parent_idx
+
+
+def detect_loops(
+    lines: List[tuple], adj: Dict[int, List[int]]
+) -> tuple:
+    """Find repeating blocks (loop latches) in the rendered tree.
+
+    A block repeats when one of its CFG successors is its own ancestor.
+    Keyed by line index: the same address can appear under several
+    parents (joins, shared stubs), and each occurrence has its own
+    ancestor chain.  Returns (loops, colored) where loops maps line idx
+    -> target addr and colored holds latch addresses plus every ancestor
+    up the chain as long as each has exactly one successor (the
+    straight-line loop body).  Coloring stops at forks.
+    """
+    parent_idx = _parent_indices(lines)
+    loops: Dict[int, int] = {}
+    for i, ln in enumerate(lines):
+        seen: Set[int] = set()
+        j = parent_idx[i]
+        while j is not None:
+            seen.add(lines[j][2])
+            j = parent_idx[j]
+        for s in adj.get(ln[2], []):
+            if s in seen:
+                loops[i] = s
+                break
+    addrs = [ln[2] for ln in lines]
+    # Seed with single-successor latches only: a fork that happens to sit
+    # on a cycle still gets the arrow suffix, but not the loop color.
+    colored: Set[int] = set(
+        addrs[i] for i in loops if len(adj.get(addrs[i], [])) == 1
+    )
+    for i, tgt in loops.items():
+        j = parent_idx[i]
+        while j is not None:
+            a = addrs[j]
+            if a == tgt:
+                # The loop closes here: color the target only when it
+                # is itself straight-line; above it is outside the loop.
+                if len(adj.get(a, [])) == 1:
+                    colored.add(a)
+                break
+            # Only straight-line parents share the loop color; a fork
+            # is skipped but the walk continues up to the target.
+            if len(adj.get(a, [])) == 1:
+                colored.add(a)
+            j = parent_idx[j]
+    return loops, colored
+
+
+def expand_with_ancestors(acc: Accordion, lines: List[tuple], li: int) -> None:
+    """Expand the line at index `li` and every folded ancestor to root.
 
     render_lines descends top-down, so expanding a node whose parent is
-    folded would show nothing.  Walk the parent links in `lines` and
-    expand the whole chain.
+    folded would show nothing.  Walk the parent line links upward.
     """
-    parent_of = {ln[2]: ln[5] for ln in lines}  # addr -> parent addr
-    a: Optional[int] = addr
-    while a is not None:
-        acc.expand(a)
-        a = parent_of.get(a)
+    parent_idx = _parent_indices(lines)
+    i: Optional[int] = li
+    while i is not None:
+        acc.expand(lines[i][2])
+        i = parent_idx[i]
 
 
 def compute_dead(
@@ -312,6 +380,7 @@ def _run_curses_ui(
                 curses.use_default_colors()
                 for i, name in enumerate(BRANCH_COLORS):
                     curses.init_pair(10 + i, getattr(curses, name), -1)
+                curses.init_pair(17, curses.COLOR_RED, -1)  # loop latch
                 use_color = True
             except Exception:
                 use_color = False
@@ -330,9 +399,15 @@ def _run_curses_ui(
             nonlocal status_msg, status_at
             status_msg, status_at = text, time.time()
 
-        def branch_attr(branch: int, addr: int, selected: bool, dead: bool = False) -> int:
+        def branch_attr(
+            branch: int, addr: int, selected: bool,
+            dead: bool = False, loop: bool = False,
+        ) -> int:
             if use_color:
-                attr = curses.color_pair(10 + branch % len(BRANCH_COLORS))
+                if loop:
+                    attr = curses.color_pair(17)
+                else:
+                    attr = curses.color_pair(10 + branch % len(BRANCH_COLORS))
             else:
                 attr = curses.A_NORMAL
             if addr in snap_data["active"]:
@@ -379,6 +454,7 @@ def _run_curses_ui(
             width = max(cols - 1, 10)
             lines = render_lines(entry, adj, acc.expanded)
             dead = compute_dead(adj, snap_data["visited"], snap_data["active"])
+            loops, loop_addrs = detect_loops(lines, adj)
             cursor = min(max(cursor, 0), max(len(lines) - 1, 0))
             stdscr.erase()
             elapsed = time.time() - started
@@ -414,10 +490,15 @@ def _run_curses_ui(
                     addr, _marks(addr, snap_data, finds, avoids),
                     len(kids), is_exp, last, cont, 10**9,
                 )
+                if li in loops:
+                    text += f" \u27f2\u2192{loops[li]:#x}"  # repeating state
                 text = text[xoff : xoff + width]
                 try:
                     stdscr.addstr(
-                        y, 0, text, branch_attr(branch, addr, li == cursor, addr in dead)
+                        y, 0, text, branch_attr(
+                            branch, addr, li == cursor, addr in dead,
+                            addr in loop_addrs,
+                        ),
                     )
                 except Exception:
                     pass
@@ -505,7 +586,7 @@ def _run_curses_ui(
                     continue
                 # Expand the node plus any folded ancestors, otherwise
                 # the flag lands in a folded subtree and nothing shows.
-                expand_with_ancestors(acc, lines, addr)
+                expand_with_ancestors(acc, lines, cursor)
                 lines = render_lines(entry, adj, acc.expanded)
                 for li2, ln in enumerate(lines):
                     if ln[0] == level + 1 and ln[1] == 0:

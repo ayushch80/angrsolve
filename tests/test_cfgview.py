@@ -6,6 +6,7 @@ from angrsolve.cfgview import (
     Accordion,
     Snapshot,
     compute_dead,
+    detect_loops,
     expand_with_ancestors,
     format_line,
     make_observer,
@@ -119,13 +120,13 @@ def test_expand_with_ancestors_opens_chain() -> None:
     entry, adj = _graph()
     acc = Accordion()
     lines = render_lines(entry, adj, acc.expanded)
-    # A is a visible collapsed child; expanding it must open the root too.
-    expand_with_ancestors(acc, lines, 0x1100)
+    # A is the 2nd line (index 1); expanding it must open the root too.
+    expand_with_ancestors(acc, lines, 1)
     assert acc.expanded == {0x1100, entry}
     lines = render_lines(entry, adj, acc.expanded)
     assert 0x1110 in [ln[2] for ln in lines]
-    # A1 is now visible; expanding it keeps the chain intact.
-    expand_with_ancestors(acc, lines, 0x1110)
+    # A1 is now visible (index 2: entry, A, A1, B).
+    expand_with_ancestors(acc, lines, 2)
     assert acc.expanded == {0x1110, 0x1100, entry}
 
 
@@ -145,6 +146,65 @@ def test_compute_dead_ignores_live_subtrees() -> None:
 def test_compute_dead_unvisited_not_dead() -> None:
     entry, adj = _graph()
     assert compute_dead(adj, set(), set()) == set()
+
+
+def test_detect_loops_finds_latch_and_target() -> None:
+    # head -> body -> latch, latch jumps back to head.
+    head, body, latch = 0x1000, 0x1100, 0x1200
+    adj = {head: [body], body: [latch], latch: [head]}
+    acc = Accordion()
+    for a in (head, body, latch):
+        acc.expand(a)
+    lines = render_lines(head, adj, acc.expanded)
+    loops, colored = detect_loops(lines, adj)
+    # Every expanded occurrence on the cycle is a latch: the latch
+    # itself, the repeated head, and the repeated body under it.
+    assert loops == {2: head, 3: body, 4: latch}
+    # straight-line chain: latch + body + head all loop-colored.
+    assert colored == {latch, body, head}
+
+
+def test_detect_loops_stops_coloring_at_fork() -> None:
+    # head -> mid -> body -> latch -> head, but mid also -> side.
+    # mid is a fork on the loop path, so it stays uncolored.
+    head, mid, body, latch, side = 0x1000, 0x1050, 0x1100, 0x1200, 0x1300
+    adj = {
+        head: [mid], mid: [body, side], body: [latch],
+        latch: [head], side: [],
+    }
+    acc = Accordion()
+    for a in (head, mid, body, latch, side):
+        acc.expand(a)
+    lines = render_lines(head, adj, acc.expanded)
+    loops, colored = detect_loops(lines, adj)
+    # latch line index: head, mid, body, latch.
+    assert loops[3] == head
+    assert mid not in colored
+    assert colored == {latch, body, head}
+
+
+def test_detect_loops_no_false_positive_on_join() -> None:
+    # Classic diamond: joins are descendants, not ancestors.
+    head, left, right, join = 0x1000, 0x1100, 0x1200, 0x1300
+    adj = {head: [left, right], left: [join], right: [join], join: []}
+    acc = Accordion()
+    for a in (head, left, right, join):
+        acc.expand(a)
+    lines = render_lines(head, adj, acc.expanded)
+    loops, colored = detect_loops(lines, adj)
+    assert loops == {} and colored == set()
+
+
+def test_render_terminates_on_cycle() -> None:
+    head, body = 0x1000, 0x1100
+    adj = {head: [body], body: [head]}
+    acc = Accordion()
+    acc.expand(head)
+    acc.expand(body)
+    lines = render_lines(head, adj, acc.expanded)
+    # body rendered once; the repeated head is a collapsed leaf,
+    # and so is head's child listed under it.
+    assert [ln[2] for ln in lines] == [head, body, head, body]
 
 
 def test_format_line_branch_split() -> None:
