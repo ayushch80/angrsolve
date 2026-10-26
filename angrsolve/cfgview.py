@@ -404,7 +404,7 @@ def _run_curses_ui(
                 preview = "".join(chr(b) if 32 <= b < 127 else "." for b in raw[:24])
                 head += f" | in: {preview}"
             if snap_data["done"]:
-                head += "  DONE \u2014 q to exit"
+                head += "  DONE \u2014 any key to exit"
             stdscr.addstr(0, 0, head[:width])
             keys = ("\u2191/\u2193 move  \u2190/\u2192 siblings  Enter expand  "
                     "Bksp fold  i input  [/] scroll  r reload  q")
