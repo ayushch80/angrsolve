@@ -1,89 +1,125 @@
-from __future__ import annotations
+"""Tests for the experimental river-tree CFG viewer (no angr needed)."""
 
-from types import SimpleNamespace
+from __future__ import annotations
 
 from angrsolve.cfgview import Accordion, Snapshot, format_line, make_observer, render_lines
 
 
-class TestAccordion:
-    def test_expand_replaces_same_level(self) -> None:
-        acc = Accordion()
-        acc.expand(0, 0)
-        acc.expand(1, 2)
-        acc.expand(1, 0)  # sibling: replaces, deeper intact (none here)
-        assert acc.expanded == {0: 0, 1: 0}
-
-    def test_expand_drops_deeper(self) -> None:
-        acc = Accordion()
-        acc.expand(0, 0)
-        acc.expand(1, 1)
-        acc.expand(0, 2)  # re-expand level 0: level 1 goes off
-        assert acc.expanded == {0: 2}
-
-    def test_collapse_drops_level_and_below(self) -> None:
-        acc = Accordion()
-        acc.expand(0, 0)
-        acc.expand(1, 1)
-        acc.collapse(1)
-        assert acc.expanded == {0: 0}
+def _graph() -> tuple:
+    # entry -> A, B ; A -> A1 ; B -> (leaf)
+    entry, a, b, a1 = 0x1000, 0x1100, 0x1200, 0x1110
+    adj = {entry: [a, b], a: [a1], b: [], a1: []}
+    return entry, adj
 
 
-class TestRenderLines:
-    ADJ = {0x100: [0x110, 0x120], 0x110: [0x111, 0x112], 0x120: []}
-
-    def test_collapsed_hides_children(self) -> None:
-        lines = render_lines(0x100, self.ADJ, {})
-        assert [(a) for _, _, a, _, _ in lines] == [0x100]
-
-    def test_expand_unfolds_one_path(self) -> None:
-        lines = render_lines(0x100, self.ADJ, {0: 0, 1: 0})
-        addrs = [a for _, _, a, _, _ in lines]
-        assert addrs == [0x100, 0x110, 0x111, 0x112, 0x120]
-
-    def test_sibling_switch(self) -> None:
-        lines = render_lines(0x100, self.ADJ, {0: 0, 1: 1})
-        addrs = [a for _, _, a, _, _ in lines]
-        assert addrs == [0x100, 0x110, 0x120]
-
-    def test_continuation_flags(self) -> None:
-        lines = render_lines(0x100, self.ADJ, {0: 0, 1: 0})
-        by_addr = {a: (last, cont) for _, _, a, last, cont in lines}
-        assert by_addr[0x110] == (False, (False,))
-        assert by_addr[0x111] == (False, (False, True))
-        assert by_addr[0x120] == (True, (False,))
+def test_accordion_expand_never_collapses() -> None:
+    acc = Accordion()
+    acc.expand(1, 0)
+    acc.expand(1, 1)  # sibling stays open too
+    assert acc.expanded[1] == {0, 1}
+    acc.expand(2, 0)
+    assert acc.expanded[1] == {0, 1}
 
 
-class TestFormatLine:
-    def test_truncates_to_width(self) -> None:
-        text = format_line(0x1234, "F●", 3, False, False, (True,), 10)
-        assert len(text) == 10
-
-    def test_collapsed_shows_kid_count(self) -> None:
-        text = format_line(0x120, "", 3, False, True, (False,), 60)
-        assert text.endswith("▸+3")
-
-    def test_expanded_hides_kid_count(self) -> None:
-        text = format_line(0x110, "", 2, True, False, (False,), 60)
-        assert "▸" not in text
+def test_accordion_collapse_node_keeps_sibling() -> None:
+    acc = Accordion()
+    acc.expand(1, 0)
+    acc.expand(1, 1)
+    acc.collapse_node(1, 0)
+    assert acc.expanded[1] == {1}
 
 
-class TestObserver:
-    def test_records_snapshot(self) -> None:
-        snap = Snapshot()
-        obs = make_observer(snap)
-        simgr = SimpleNamespace(
-            active=[SimpleNamespace(addr=0x10), SimpleNamespace(addr=0x20)],
-            deadended=[],
-            stashes={"found": [1], "avoided": []},
-        )
-        assert obs(7, simgr) is None
-        assert snap.steps == 7
-        assert snap.active == {0x10, 0x20}
-        assert snap.visited == {0x10, 0x20}
-        assert snap.found == 1
+def test_accordion_collapse_level_and_below() -> None:
+    acc = Accordion()
+    acc.expand(1, 0)
+    acc.expand(2, 0)
+    acc.collapse(1)
+    assert acc.expanded == {}
 
-    def test_stop_requests_halt(self) -> None:
-        snap = Snapshot()
-        snap.stop = True
-        obs = make_observer(snap)
-        assert obs(1, SimpleNamespace()) is True
+
+def test_render_river_splits_and_continuation() -> None:
+    entry, adj = _graph()
+    lines = render_lines(entry, adj, {0: {0}, 1: {0, 1}})
+    by_addr = {ln[2]: ln for ln in lines}
+    # A is not last, B is last
+    assert by_addr[0x1100][3] is False
+    assert by_addr[0x1200][3] is True
+    # A1 descends from A (not last) -> continuation segment True;
+    # B descends from entry which is the last of its level -> False
+    assert by_addr[0x1110][4] == (False, True)
+    assert by_addr[0x1200][4] == (False,)
+
+
+def test_render_collapsed_children_hidden() -> None:
+    entry, adj = _graph()
+    lines = render_lines(entry, adj, {})
+    addrs = [ln[2] for ln in lines]
+    assert addrs == [entry, 0x1100, 0x1200]
+
+
+def test_render_branch_ids_share_downstream_color() -> None:
+    entry, adj = _graph()
+    lines = render_lines(entry, adj, {0: {0}, 1: {0, 1}})
+    by_addr = {ln[2]: ln for ln in lines}
+    assert by_addr[0x1100][6] == 0  # branch of A
+    assert by_addr[0x1110][6] == 0  # A1 inherits A's branch
+    assert by_addr[0x1200][6] == 1  # B is its own branch
+
+
+def test_render_parent_links() -> None:
+    entry, adj = _graph()
+    lines = render_lines(entry, adj, {0: {0}, 1: {0, 1}})
+    by_addr = {ln[2]: ln for ln in lines}
+    assert by_addr[entry][5] is None
+    assert by_addr[0x1100][5] == entry
+    assert by_addr[0x1110][5] == 0x1100
+
+
+def test_render_ignores_stale_indices() -> None:
+    entry, adj = _graph()
+    lines = render_lines(entry, adj, {0: {0}, 1: {0, 5}})  # 5 is out of range
+    assert 0x1110 in [ln[2] for ln in lines]
+
+
+def test_format_line_branch_split() -> None:
+    text = format_line(0x1100, "", 1, True, False, (False,), 200)
+    assert text == "  ├─0x1100"
+
+
+def test_format_line_root() -> None:
+    assert format_line(0x1000, "", 2, True, True, (), 200) == "0x1000"
+
+
+def test_format_line_last_child() -> None:
+    assert format_line(0x1200, "", 0, True, True, (False,), 200) == "  └─0x1200"
+
+
+def test_format_line_collapsed_count_and_find() -> None:
+    text = format_line(0x1100, "F", 3, False, True, (), 200)
+    assert text == "F0x1100 ▸+3"
+
+
+def test_observer_updates_snapshot() -> None:
+    snap = Snapshot()
+
+    class _S:
+        def __init__(self, addr: int) -> None:
+            self.addr = addr
+
+    class _Simgr:
+        active = [_S(1), _S(2)]
+        deadended: list = []
+        stashes = {"found": [_S(9)]}
+
+    obs = make_observer(snap)
+    assert obs(10, _Simgr()) is None
+    assert snap.steps == 10
+    assert snap.active == {1, 2}
+    assert snap.visited == {1, 2}
+    assert snap.found == 1
+
+
+def test_observer_stop_flag() -> None:
+    snap = Snapshot()
+    snap.stop = True
+    assert make_observer(snap)(1, object()) is True

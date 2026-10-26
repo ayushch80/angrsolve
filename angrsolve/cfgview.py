@@ -30,46 +30,71 @@ logger = logging.getLogger("angrsolve")
 # --------------------------------------------------------------------------
 
 class Accordion:
-    """One expanded node per depth level.
+    """Set of expanded nodes per depth level.
 
-    ``expand(level, idx)`` selects the node and drops every deeper
-    expansion.  ``collapse(level)`` drops that level and below.
+    Expanding never collapses anything: ``expand(level, idx)`` only adds.
+    ``collapse(level)`` drops that level and everything below;
+    ``collapse_node(level, idx)`` drops a single node.
     """
 
     def __init__(self) -> None:
-        self.expanded: Dict[int, int] = {}
+        self.expanded: Dict[int, Set[int]] = {}
 
     def expand(self, level: int, idx: int) -> None:
-        self.expanded[level] = idx
-        for lv in [lv for lv in self.expanded if lv > level]:
-            del self.expanded[lv]
+        self.expanded.setdefault(level, set()).add(idx)
 
     def collapse(self, level: int) -> None:
         for lv in [lv for lv in self.expanded if lv >= level]:
             del self.expanded[lv]
 
+    def collapse_node(self, level: int, idx: int) -> None:
+        if level in self.expanded:
+            self.expanded[level].discard(idx)
+            if not self.expanded[level]:
+                del self.expanded[level]
+
 
 def render_lines(
-    entry: int, adj: Dict[int, List[int]], expanded: Dict[int, int]
+    entry: int, adj: Dict[int, List[int]], expanded: Dict[int, Set[int]]
 ) -> List[tuple]:
     """Flatten the accordion-unfolded tree into visible lines.
 
-    Each line is (level, sib_idx, addr, last, cont) where `last` marks the
-    final sibling and `cont` flags, per ancestor level, whether that
-    ancestor has a following sibling (drives the vertical continuation).
+    Each line is (level, sib_idx, addr, last, cont, parent, branch) where
+    `last` marks the final sibling, `cont` flags per ancestor level whether
+    it has a following sibling (drives the vertical lines), `parent` is the
+    parent block address (None at the root), and `branch` is the level-1
+    ancestor index so whole downstream paths share one color.
     """
     lines: List[tuple] = []
 
-    def rec(addr: int, level: int, sib_idx: int, last: bool, cont: tuple) -> None:
-        lines.append((level, sib_idx, addr, last, cont))
-        if expanded.get(level) == sib_idx:
-            kids = adj.get(addr, [])
+    def rec(
+        addr: int,
+        level: int,
+        sib_idx: int,
+        last: bool,
+        cont: tuple,
+        parent: Optional[int],
+        branch: int,
+    ) -> None:
+        lines.append((level, sib_idx, addr, last, cont, parent, branch))
+        kids = adj.get(addr, [])
+        kid_cont_base = cont + (not last,)
+        if sib_idx in expanded.get(level, ()):
             for i, k in enumerate(kids):
                 # A child's continuation segments describe its ancestors:
                 # the parent contributes only if it has a following sibling.
-                rec(k, level + 1, i, i == len(kids) - 1, cont + (not last,))
+                rec(
+                    k, level + 1, i, i == len(kids) - 1, kid_cont_base,
+                    addr, branch if level > 0 else i,
+                )
+        else:
+            for i, k in enumerate(kids):
+                lines.append(
+                    (level + 1, i, k, i == len(kids) - 1,
+                     kid_cont_base, addr, branch if level > 0 else i)
+                )
 
-    rec(entry, 0, 0, True, ())
+    rec(entry, 0, 0, True, (), None, 0)
     return lines
 
 
@@ -86,7 +111,7 @@ def format_line(
     prefix = "".join("\u2502 " if c else "  " for c in cont)
     if cont:
         prefix += "\u2514\u2500" if last else "\u251c\u2500"
-    text = f"{prefix}{addr:#x}{marks}"
+    text = f"{prefix}{marks}{addr:#x}"
     if n_kids and not is_expanded:
         text += f" \u25b8+{n_kids}"
     return text[:width]
@@ -109,9 +134,17 @@ class Snapshot:
     deadended: int = 0
     done: bool = False
     stop: bool = False
+    # Witness-input lookup: UI sets input_request to a block address; the
+    # worker resolves input_result = {addr, stdin, argv, status}.
+    input_request: Optional[int] = None
+    input_result: Optional[dict] = None
+    # Most recently resolved concrete input (shown in the header).
+    current_input: Optional[dict] = None
 
 
-def make_observer(snap: Snapshot) -> Callable[[int, Any], Optional[bool]]:
+def make_observer(
+    snap: Snapshot, input_setup: Any = None
+) -> Callable[[int, Any], Optional[bool]]:
     def _observe(step: int, simgr: Any) -> Optional[bool]:
         if snap.stop:
             return True  # stop exploration
@@ -125,11 +158,53 @@ def make_observer(snap: Snapshot) -> Callable[[int, Any], Optional[bool]]:
                     snap.visited = set(list(snap.visited)[-MAX_TRACKED:])
                 snap.found = len(simgr.stashes.get("found", []))
                 snap.deadended = len(simgr.deadended)
+                req = snap.input_request
+            if req is not None and input_setup is not None:
+                _resolve_witness(snap, simgr, input_setup, req)
         except Exception:
             pass
         return None
 
     return _observe
+
+
+def _resolve_witness(snap: Snapshot, simgr: Any, input_setup: Any, addr: int) -> None:
+    """Find a live state that passed through `addr` and concretize its input.
+
+    Runs in the worker thread (safe: the UI never touches simgr).  Only one
+    in flight at a time; the result lands in ``snap.input_result``.
+    """
+    from angrsolve.explorer import _extract_argv_from_mem, _extract_stdin
+
+    result: dict = {"addr": addr, "stdin": None, "argv": None, "status": "unknown"}
+    try:
+        states = list(simgr.active) + list(simgr.deadended)[:200]
+        witness = None
+        for s in states:
+            try:
+                if addr in list(s.history.bbl_addrs):
+                    witness = s
+                    break
+            except Exception:
+                continue
+        if witness is None:
+            result["status"] = "pruned (no live state passed through it)"
+        else:
+            if input_setup.stdin_size > 0:
+                result["stdin"] = _extract_stdin(witness, input_setup.stdin_size)
+            if input_setup.argv_size > 0 and input_setup.argv_addr is not None:
+                result["argv"] = _extract_argv_from_mem(
+                    witness, input_setup.argv_addr, input_setup.argv_size
+                )
+            result["status"] = "witness (example input that reached it)"
+    except Exception:
+        result["status"] = "lookup failed"
+    with snap.lock:
+        # Only publish if the UI is still waiting for this address.
+        if snap.input_request == addr:
+            snap.input_result = result
+            snap.input_request = None
+            snap.current_input = result
 
 
 # --------------------------------------------------------------------------
@@ -182,6 +257,11 @@ def _run_curses_ui(
 
     ANSI = {"C_ACT": 1, "C_FIND": 2, "C_AVOID": 3, "C_DIM": 4}
 
+    BRANCH_COLORS = (
+        "COLOR_GREEN", "COLOR_YELLOW", "COLOR_CYAN",
+        "COLOR_MAGENTA", "COLOR_BLUE", "COLOR_WHITE",
+    )
+
     def draw(stdscr: Any) -> None:
         curses.curs_set(0)
         stdscr.timeout(200)
@@ -189,10 +269,8 @@ def _run_curses_ui(
             try:
                 curses.start_color()
                 curses.use_default_colors()
-                curses.init_pair(ANSI["C_ACT"], curses.COLOR_GREEN, -1)
-                curses.init_pair(ANSI["C_FIND"], curses.COLOR_YELLOW, -1)
-                curses.init_pair(ANSI["C_AVOID"], curses.COLOR_RED, -1)
-                curses.init_pair(ANSI["C_DIM"], curses.COLOR_CYAN, -1)
+                for i, name in enumerate(BRANCH_COLORS):
+                    curses.init_pair(10 + i, getattr(curses, name), -1)
                 use_color = True
             except Exception:
                 use_color = False
@@ -200,49 +278,41 @@ def _run_curses_ui(
             use_color = False
 
         entry, adj = build_graph(proj)
-        levels: List[List[int]] = [[entry]]
         acc = Accordion()
         cursor = 0
+        xoff = 0
         status_msg = ""
         status_at = 0.0
-
-        def rebuild() -> None:
-            del levels[1:]
-            lv = 0
-            while lv in acc.expanded:
-                idx = acc.expanded[lv]
-                if idx >= len(levels[lv]):
-                    acc.collapse(lv)
-                    break
-                levels.append(adj.get(levels[lv][idx], []))
-                lv += 1
-
-        def reload_graph() -> None:
-            nonlocal entry, adj
-            entry, adj = build_graph(proj)
-            while levels and levels[0] != [entry]:
-                levels[0] = [entry]
-            rebuild()
+        popup = None  # (title, [body lines]) or None
 
         def status(text: str) -> None:
             nonlocal status_msg, status_at
             status_msg, status_at = text, time.time()
 
-        def line_attr(addr: int, snap_data: dict, selected: bool) -> int:
-            if addr in snap_data["active"]:
-                attr = curses.color_pair(ANSI["C_ACT"]) | curses.A_BOLD if use_color else curses.A_BOLD
-            elif addr in finds:
-                attr = curses.color_pair(ANSI["C_FIND"]) if use_color else curses.A_BOLD
-            elif addr in avoids:
-                attr = curses.color_pair(ANSI["C_AVOID"]) if use_color else curses.A_NORMAL
-            elif addr in snap_data["visited"]:
-                attr = curses.color_pair(ANSI["C_DIM"]) if use_color else curses.A_DIM
+        def branch_attr(branch: int, addr: int, selected: bool) -> int:
+            if use_color:
+                attr = curses.color_pair(10 + branch % len(BRANCH_COLORS))
             else:
                 attr = curses.A_NORMAL
+            if addr in snap_data["active"]:
+                attr |= curses.A_BOLD
             return attr | curses.A_REVERSE if selected else attr
 
-        rebuild()
-        status("Enter expands \u2500 r rebuilds \u2500 q quits")
+        def show_popup(title: str, body: List[str]) -> None:
+            nonlocal popup
+            popup = (title, body)
+
+        def fmt_blob(data: Any) -> List[str]:
+            if not data:
+                return ["<empty>"]
+            if isinstance(data, bytes):
+                hexs = data.hex()
+                lines = [hexs[i : i + 64] for i in range(0, len(hexs), 64)]
+                printable = "".join(chr(b) if 32 <= b < 127 else "." for b in data)
+                return lines[:8] + [f"ascii: {printable[:64]}"]
+            return [str(data)[:128]]
+
+        status("Enter expands \u2014 i shows input \u2014 r rebuilds \u2014 q quits")
         while True:
             with snap.lock:
                 snap_data = {
@@ -252,7 +322,16 @@ def _run_curses_ui(
                     "found": snap.found,
                     "deadended": snap.deadended,
                     "done": snap.done,
+                    "current_input": snap.current_input,
+                    "input_result": snap.input_result,
                 }
+                if snap.input_result is not None:
+                    res = snap.input_result
+                    snap.input_result = None
+                    show_popup(
+                        f"input reaching {res['addr']:#x} ({res['status']})",
+                        ["stdin:"] + fmt_blob(res["stdin"]) + ["argv:"] + fmt_blob(res["argv"]),
+                    )
             rows, cols = stdscr.getmaxyx()
             width = max(cols - 1, 10)
             lines = render_lines(entry, adj, acc.expanded)
@@ -266,36 +345,63 @@ def _run_curses_ui(
             )
             if timeout:
                 head += f"/{timeout:.0f}s"
+            cur_in = snap_data["current_input"]
+            if cur_in and cur_in.get("stdin"):
+                raw = cur_in["stdin"]
+                preview = "".join(chr(b) if 32 <= b < 127 else "." for b in raw[:24])
+                head += f" | in: {preview}"
             if snap_data["done"]:
                 head += "  DONE \u2014 q to exit"
             stdscr.addstr(0, 0, head[:width])
-            keys = "\u2191/\u2193 move  \u2190/\u2192 siblings  Enter expand  Bksp collapse  r reload  q"
+            keys = ("\u2191/\u2193 move  \u2190/\u2192 siblings  Enter expand  "
+                    "Bksp fold  i input  [/] scroll  r reload  q")
             stdscr.addstr(1, 0, keys[:width])
             # Scroll so the cursor line is visible.
             first = max(0, min(cursor, len(lines) - (rows - 3)))
             first = min(first, cursor)
             for vi, li in enumerate(range(first, len(lines))):
                 y = vi + 2
-                if y >= rows:
+                if y >= rows - 1:
                     break
-                level, sib_idx, addr, last, cont = lines[li]
+                level, sib_idx, addr, last, cont, parent, branch = lines[li]
                 kids = adj.get(addr, [])
-                is_exp = acc.expanded.get(level) == sib_idx and bool(kids)
+                is_exp = bool(kids) and sib_idx in acc.expanded.get(level, ())
                 text = format_line(
                     addr, _marks(addr, snap_data, finds, avoids),
-                    len(kids), is_exp, last, cont, width,
+                    len(kids), is_exp, last, cont, 10**9,
                 )
+                text = text[xoff : xoff + width]
                 try:
                     stdscr.addstr(
-                        y, 0, text, line_attr(addr, snap_data, li + first == cursor)
+                        y, 0, text, branch_attr(branch, addr, li == cursor)
                     )
                 except Exception:
                     pass
-            if status_msg and time.time() - status_at < 4 and rows > 1:
+            if status_msg and time.time() - status_at < 4:
                 try:
                     stdscr.addstr(rows - 1, 0, status_msg[:width])
                 except Exception:
                     pass
+            if popup is not None:
+                title, body = popup
+                ph, pw = min(len(body) + 4, rows - 2), min(max([len(title)] + [len(b) for b in body]) + 4, width)
+                py, px = max(0, (rows - ph) // 2), max(0, (width - pw) // 2)
+                try:
+                    win = curses.newwin(ph, pw, py, px)
+                    win.box()
+                    win.addstr(0, 2, title[: pw - 4], curses.A_BOLD)
+                    for bi, bl in enumerate(body[: ph - 2]):
+                        win.addstr(bi + 1, 1, bl[: pw - 2])
+                    win.addstr(ph - 1, 2, "any key to close"[: pw - 4])
+                    win.refresh()
+                except Exception:
+                    pass
+                stdscr.refresh()
+                stdscr.timeout(-1)
+                stdscr.getch()
+                stdscr.timeout(200 if not snap_data["done"] else -1)
+                popup = None
+                continue
             stdscr.refresh()
             if snap_data["done"]:
                 stdscr.timeout(-1)
@@ -309,11 +415,23 @@ def _run_curses_ui(
             if key == ord("r"):
                 status("rebuilding CFG\u2026")
                 stdscr.refresh()
-                reload_graph()
+                entry, adj = build_graph(proj)
                 status(f"graph reloaded: {len(adj)} blocks")
                 continue
-            level, sib_idx, addr, last, cont = lines[cursor]
-            n_sibs = len(levels[level]) if level < len(levels) else 1
+            if key in (ord("["), ord("{")):
+                xoff = max(0, xoff - 8)
+                continue
+            if key in (ord("]"), ord("}")):
+                xoff += 8
+                continue
+            if key == ord("i"):
+                level, sib_idx, addr, last, cont, parent, branch = lines[cursor]
+                with snap.lock:
+                    snap.input_request = addr
+                    snap.input_result = None
+                status(f"resolving input for {addr:#x}\u2026")
+                continue
+            level, sib_idx, addr, last, cont, parent, branch = lines[cursor]
             if key in (curses.KEY_UP, ord("k")):
                 cursor = max(0, cursor - 1)
             elif key in (curses.KEY_DOWN, ord("j")):
@@ -326,32 +444,36 @@ def _run_curses_ui(
                             cursor = li2
                             break
             elif key in (curses.KEY_RIGHT, ord("l")):
+                n_sibs = len(adj.get(parent, [addr])) if parent is not None else 1
                 if sib_idx + 1 < n_sibs:
                     for li2, ln in enumerate(lines):
                         if ln[0] == level and ln[1] == sib_idx + 1:
                             cursor = li2
                             break
             elif key in (curses.KEY_ENTER, 10, 13, ord(" ")):
-                # Accordion: a same-level expand replaces the previous one.
                 kids = adj.get(addr, [])
                 if not kids:
                     status(f"{addr:#x}: no successors")
                     continue
                 acc.expand(level, sib_idx)
-                rebuild()
                 lines = render_lines(entry, adj, acc.expanded)
                 for li2, ln in enumerate(lines):
                     if ln[0] == level + 1 and ln[1] == 0:
-                        cursor = li2
-                        break
-            elif key in (curses.KEY_BACKSPACE, 127, 8, ord("u")):
+                        # land on this node's first child
+                        if ln[5] == addr:
+                            cursor = li2
+                            break
+            elif key in (curses.KEY_BACKSPACE, 127, 8, ord("u"), ord("x")):
                 if level > 0:
-                    acc.collapse(level - 1)
-                    rebuild()
+                    if key == ord("x"):
+                        # fold just this node, keep its siblings open
+                        acc.collapse_node(level, sib_idx)
+                    else:
+                        acc.collapse(level - 1)
                     lines = render_lines(entry, adj, acc.expanded)
-                    parent_sib = acc.expanded.get(level - 1, 0)
+                    # land on the folded node's parent
                     for li2, ln in enumerate(lines):
-                        if ln[0] == level - 1 and ln[1] == parent_sib:
+                        if ln[2] == parent:
                             cursor = li2
                             break
 
@@ -376,7 +498,7 @@ def run_with_cfg_view(proj: Any, input_setup: Any, cfg: Any) -> Any:
     avoids = set(cfg.avoid_addresses)
 
     snap = Snapshot()
-    cfg.observer = make_observer(snap)
+    cfg.observer = make_observer(snap, input_setup)
     box: Dict[str, Any] = {}
     started = time.time()
 
