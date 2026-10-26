@@ -116,8 +116,13 @@ def _run(args) -> int:
     # Setup symbolic inputs.
     input_setup = setup_input(proj, input_configs, constraint_cfg)
 
-    # Run exploration.
-    solution = explore(proj, input_setup, explore_cfg)
+    # Run exploration (experimental interactive CFG viewer if requested).
+    if explore_cfg.cfg_view:
+        from angrsolve.cfgview import run_with_cfg_view
+
+        solution = run_with_cfg_view(proj, input_setup, explore_cfg)
+    else:
+        solution = explore(proj, input_setup, explore_cfg)
 
     if solution is not None:
         output_solution(solution, json_mode=args.json, save_path=args.save)

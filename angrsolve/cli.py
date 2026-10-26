@@ -172,6 +172,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="EXPERIMENTAL: write a standalone HTML progress report to FILE",
     )
+    parser.add_argument(
+        "--cfg-view",
+        action="store_true",
+        default=False,
+        help="EXPERIMENTAL: interactive accordion CFG viewer (TTY only)",
+    )
 
     # Logging / verbosity
     parser.add_argument(
@@ -279,4 +285,5 @@ def build_explore_config(args: argparse.Namespace) -> ExploreConfig:
         progress=args.progress,
         progress_report=args.progress_report,
         quiet=args.quiet,
+        cfg_view=args.cfg_view,
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import signal
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
@@ -31,6 +32,10 @@ class ExploreConfig:
     progress: bool = False
     progress_report: Optional[str] = None
     quiet: bool = False
+    cfg_view: bool = False
+    # Optional callable invoked from the step hook as observer(step, simgr).
+    # Used by experimental live views (progress panel, CFG view).
+    observer: Optional[Callable[[int, Any], None]] = None
 
 
 def _timeout_handler(signum: int, frame: Any) -> None:
@@ -202,6 +207,12 @@ def explore(
 
     def _step_func(simgr_inner: Any) -> bool:
         step_counts[0] += 1
+        if cfg.observer is not None:
+            try:
+                if cfg.observer(step_counts[0], simgr_inner) is True:
+                    return True  # observer requested stop (e.g. UI quit)
+            except Exception:
+                logger.debug("explore observer failed", exc_info=True)
         if tracker is not None and display is not None:
             if tracker.sample(step_counts[0], simgr_inner, start_time):
                 display.update(step_counts[0], simgr_inner)
@@ -231,8 +242,10 @@ def explore(
         if avoid:
             explore_kwargs["avoid"] = avoid
 
-        if cfg.timeout is not None:
-            # Use signal-based timeout for hard kill.
+        if cfg.timeout is not None and threading.current_thread() is threading.main_thread():
+            # Use signal-based timeout for hard kill.  Skipped off the main
+            # thread (e.g. experimental CFG view runs explore in a worker)
+            # because the alarm would fire in the wrong thread.
             signal.signal(signal.SIGALRM, _timeout_handler)
             signal.alarm(int(cfg.timeout) + 1)
 
