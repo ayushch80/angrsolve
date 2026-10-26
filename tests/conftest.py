@@ -1,29 +1,69 @@
 from __future__ import annotations
 
+import hashlib
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Generator
+from typing import List, Optional
 
 import pytest
 
+# Fixed base flags so compiled fixtures behave the same on every host.
+# Callers must pass an explicit PIE choice ("-pie" or "-no-pie") because
+# gcc's default varies by distro/version and changes binary layout.
+BASE_FLAGS: List[str] = ["-O0", "-g0", "-fno-stack-protector"]
 
-def _compile_c(src: str, name: str) -> Path:
-    dst = Path(tempfile.gettempdir()) / name
-    if dst.exists():
+
+def _gcc() -> str:
+    exe = shutil.which("gcc")
+    if exe is None:
+        pytest.skip("gcc not available")
+    return exe
+
+
+def compile_c(
+    src: str,
+    name: str,
+    flags: Optional[List[str]] = None,
+    dest_dir: Optional[Path] = None,
+) -> Path:
+    """Compile C source deterministically, rebuilding only when needed.
+
+    The binary is (re)compiled when the hash of ``src`` + ``flags``
+    differs from the ``<name>.sha256`` sidecar next to it.  This fixes
+    the stale-cache trap where editing the source had no effect because
+    an old ``/tmp`` binary was reused.
+    """
+    dst_dir = dest_dir or Path(tempfile.gettempdir()) / "angrsolve_tests"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / name
+    sidecar = dst_dir / f"{name}.sha256"
+
+    digest = hashlib.sha256(
+        (src + "\x00" + " ".join(flags or [])).encode()
+    ).hexdigest()
+
+    if dst.exists() and sidecar.exists() and sidecar.read_text().strip() == digest:
         return dst
+
+    cmd = [_gcc(), *BASE_FLAGS]
+    if flags:
+        cmd.extend(flags)
+    cmd.extend(["-o", str(dst), "-x", "c", "-"])
     subprocess.run(
-        ["gcc", "-o", str(dst), "-x", "c", "-"],
+        cmd,
         input=src,
         capture_output=True,
         text=True,
         check=True,
     )
+    sidecar.write_text(digest)
     return dst
 
 
 @pytest.fixture(scope="session")
-def argv_binary() -> Generator[Path, None, None]:
+def argv_binary() -> Path:
     src = r"""
 #include <stdio.h>
 #include <string.h>
@@ -36,11 +76,11 @@ int main(int argc, char **argv) {
     return 0;
 }
 """
-    yield _compile_c(src, "test_argv_bin")
+    return compile_c(src, "test_argv_bin", flags=["-no-pie"])
 
 
 @pytest.fixture(scope="session")
-def stdin_binary() -> Generator[Path, None, None]:
+def stdin_binary() -> Path:
     src = r"""
 #include <stdio.h>
 #include <string.h>
@@ -55,11 +95,11 @@ int main(void) {
     return 0;
 }
 """
-    yield _compile_c(src, "test_stdin_bin")
+    return compile_c(src, "test_stdin_bin", flags=["-no-pie"])
 
 
 @pytest.fixture(scope="session")
-def file_binary() -> Generator[Path, None, None]:
+def file_binary() -> Path:
     src = r"""
 #include <stdio.h>
 #include <string.h>
@@ -75,11 +115,11 @@ int main(void) {
     return 0;
 }
 """
-    yield _compile_c(src, "test_file_bin")
+    return compile_c(src, "test_file_bin", flags=["-no-pie"])
 
 
 @pytest.fixture(scope="session")
-def pie_binary() -> Generator[Path, None, None]:
+def pie_binary() -> Path:
     src = r"""
 #include <stdio.h>
 #include <string.h>
@@ -90,33 +130,15 @@ int main(int argc, char **argv) {
     return 0;
 }
 """
-    dst = Path(tempfile.gettempdir()) / "test_pie_bin"
-    if not dst.exists():
-        subprocess.run(
-            ["gcc", "-pie", "-fno-stack-protector", "-o", str(dst), "-x", "c", "-"],
-            input=src,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    yield dst
+    return compile_c(src, "test_pie_bin", flags=["-pie"])
 
 
 @pytest.fixture(scope="session")
-def nostdlib_binary() -> Generator[Path, None, None]:
+def nostdlib_binary() -> Path:
     """A minimal binary with NO libc symbols for testing auto-avoid failure."""
     src = r"""
 void _start(void) {
     __asm__("mov $60, %%eax; xor %%edi, %%edi; syscall" ::: "eax", "edi");
 }
 """
-    dst = Path(tempfile.gettempdir()) / "test_nostdlib_bin"
-    if not dst.exists():
-        subprocess.run(
-            ["gcc", "-nostdlib", "-o", str(dst), "-x", "c", "-"],
-            input=src,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    yield dst
+    return compile_c(src, "test_nostdlib_bin", flags=["-nostdlib"])

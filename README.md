@@ -29,12 +29,13 @@ Requires Python 3.8+ and angr 9.2+. See [DOCS.md](DOCS.md) for detailed docs.
 
 ## Challenges solved
 
-| Challenge | Platform | Difficulty | Input type |
-|-----------|----------|-----------|------------|
-| Gatekeeper | picoCTF | medium | stdin |
-| file-run2  | picoCTF | medium | argv  |
-| Bbbbloat   | picoCTF | medium | stdin |
-| Keygenme   | picoCTF | hard   | stdin |
+| Challenge     | Platform          | Difficulty | Input type |
+|---------------|-------------------|------------|------------|
+| Gatekeeper    | CyLab (picoCTF)   | medium     | stdin      |
+| file-run2     | CyLab (picoCTF)   | medium     | argv       |
+| Bbbbloat      | CyLab (picoCTF)   | medium     | stdin      |
+| Keygenme      | CyLab (picoCTF)   | hard       | stdin      |
+| Totally Legit | h7ctf finals 2026 | medium     | stdin      |
 
 ## Documentation
 

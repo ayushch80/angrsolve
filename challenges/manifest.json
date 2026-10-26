@@ -1,0 +1,34 @@
+{
+  "_notes": "How to add a challenge: drop the binary in this directory, add an entry below, and (if user-facing) a row in README.md. Binaries NOT listed here are ignored by the test suite, so adding/removing binaries never breaks tests. If a binary is replaced by a different build, re-derive find_rva with: objdump -d <bin> | grep -n <success-string-xref>. find_symbol = symbol name (non-stripped only). find_rva = file address of the first success-only instruction (works for PIE and stripped: rebased at test time).",
+  "version": 1,
+  "challenges": {
+    "gatekeeper": {
+      "find_symbol": "reveal_flag",
+      "args": ["--stdin", "32"],
+      "timeout": 240,
+      "notes": "stdin numeric code > 999 reaches reveal_flag; /flag.txt need not exist (find only requires reaching it)"
+    },
+    "file-run2": {
+      "find_rva": "0x11df",
+      "args": ["--argv", "32"],
+      "timeout": 120,
+      "notes": "argv[1]=='Hello!' success branch (mov flag ptr after strcmp jne). NOTE: `flag` symbol is .data, never executes — do not use as find target"
+    },
+    "bbbbloat": {
+      "find_rva": "0x14d6",
+      "args": ["--stdin", "32"],
+      "timeout": 300,
+      "notes": "stripped; scanf %d == 0x86187 falls through jne at 0x14d0 into success block at 0x14d6"
+    },
+    "totally-legit": {
+      "find_rva": "0x12e4",
+      "args": ["--stdin", "32"],
+      "timeout": 300,
+      "notes": "stripped; lea 'license accepted' after 39-iteration xor decode loop"
+    },
+    "keygenme": {
+      "skip_reason": "MD5 via libcrypto is an unresolved import with auto_load_libs=False, so angr stubs it with unconstrained output and any solve would be meaningless. Re-enable if the tool ever models MD5.",
+      "notes": "stripped; valid/invalid license-key check around MD5@plt"
+    }
+  }
+}
