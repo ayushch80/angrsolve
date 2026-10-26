@@ -1,16 +1,20 @@
-"""EXPERIMENTAL interactive accordion CFG viewer.
+"""EXPERIMENTAL interactive CFG river viewer.
 
-Shows the binary's control-flow graph level by level (one terminal row per
-depth).  Each row lists that depth's basic blocks; at most one node per
-level is expanded — expanding a sibling collapses the previously expanded
-one and resets deeper levels.  Blocks are badged live from exploration:
+Shows the binary's control-flow graph as an expanding tree: each split
+branches downstream with connector lines, and every level-1 branch keeps
+its own color so forks stay traceable.  Multiple branches stay open at
+once; expanding never collapses siblings.  Blocks are badged live from
+exploration:
 
     ``●`` active state here   ``·`` visited   ``F`` find target
-    ``A`` avoid target        ``★`` solution found here
+    ``A`` avoid target        dimmed = subtree fully exhausted (dead)
 
-Keys: ↑/↓ or k/j move, ←/→ or h/l siblings, Enter/Space expand,
-Backspace/u collapse one level, r rebuild the graph, q abandon the run.  Exploration runs in a worker thread; the UI polls a
-lock-protected snapshot so rendering never touches live angr state.
+Keys: ↑/↓ or k/j move, ←/→ or h/l siblings, Enter/Space expand the
+selected block, Backspace folds it (or jumps to its parent when already
+folded), x folds one node, i shows a witness input reaching the block,
+[/] scroll horizontally, r rebuilds the graph, q abandons the run.
+Exploration runs in a worker thread; the UI polls a lock-protected
+snapshot so rendering never touches live angr state.
 """
 
 from __future__ import annotations
@@ -140,6 +144,52 @@ class Snapshot:
     input_result: Optional[dict] = None
     # Most recently resolved concrete input (shown in the header).
     current_input: Optional[dict] = None
+
+
+def expand_with_ancestors(
+    acc: Accordion, lines: List[tuple], level: int, sib_idx: int, addr: int
+) -> None:
+    """Expand a node and every folded ancestor up to the root.
+
+    render_lines descends top-down, so expanding a node whose parent is
+    folded would show nothing.  Walk the parent links in `lines` and
+    expand the whole chain.
+    """
+    by_addr = {ln[2]: (ln[0], ln[1], ln[5]) for ln in lines}
+    lv, ix, a = level, sib_idx, addr
+    while True:
+        acc.expand(lv, ix)
+        if lv == 0:
+            break
+        info = by_addr.get(a)
+        if info is None or info[2] is None or info[2] not in by_addr:
+            break
+        lv, ix, a = by_addr[info[2]][0], by_addr[info[2]][1], info[2]
+
+
+def compute_dead(
+    adj: Dict[int, List[int]], visited: Set[int], active: Set[int]
+) -> Set[int]:
+    """Visited blocks whose subtree holds no live state.
+
+    A node is dead when it was visited, is not itself active, and no
+    active address is reachable below it — exploration under it is fully
+    exhausted.  Computed as visited minus (active plus all ancestors
+    of active), so one reverse walk covers the whole graph.
+    """
+    parents: Dict[int, Set[int]] = {}
+    for p, kids in adj.items():
+        for k in kids:
+            parents.setdefault(k, set()).add(p)
+    live = set(active)
+    stack = list(active)
+    while stack:
+        a = stack.pop()
+        for p in parents.get(a, ()):
+            if p not in live:
+                live.add(p)
+                stack.append(p)
+    return set(visited) - live
 
 
 def make_observer(
@@ -289,13 +339,15 @@ def _run_curses_ui(
             nonlocal status_msg, status_at
             status_msg, status_at = text, time.time()
 
-        def branch_attr(branch: int, addr: int, selected: bool) -> int:
+        def branch_attr(branch: int, addr: int, selected: bool, dead: bool = False) -> int:
             if use_color:
                 attr = curses.color_pair(10 + branch % len(BRANCH_COLORS))
             else:
                 attr = curses.A_NORMAL
             if addr in snap_data["active"]:
                 attr |= curses.A_BOLD
+            if dead:
+                attr |= curses.A_DIM
             return attr | curses.A_REVERSE if selected else attr
 
         def show_popup(title: str, body: List[str]) -> None:
@@ -335,6 +387,7 @@ def _run_curses_ui(
             rows, cols = stdscr.getmaxyx()
             width = max(cols - 1, 10)
             lines = render_lines(entry, adj, acc.expanded)
+            dead = compute_dead(adj, snap_data["visited"], snap_data["active"])
             cursor = min(max(cursor, 0), max(len(lines) - 1, 0))
             stdscr.erase()
             elapsed = time.time() - started
@@ -373,7 +426,7 @@ def _run_curses_ui(
                 text = text[xoff : xoff + width]
                 try:
                     stdscr.addstr(
-                        y, 0, text, branch_attr(branch, addr, li == cursor)
+                        y, 0, text, branch_attr(branch, addr, li == cursor, addr in dead)
                     )
                 except Exception:
                     pass
@@ -455,7 +508,9 @@ def _run_curses_ui(
                 if not kids:
                     status(f"{addr:#x}: no successors")
                     continue
-                acc.expand(level, sib_idx)
+                # Expand the node plus any folded ancestors, otherwise
+                # the flag lands in a folded subtree and nothing shows.
+                expand_with_ancestors(acc, lines, level, sib_idx, addr)
                 lines = render_lines(entry, adj, acc.expanded)
                 for li2, ln in enumerate(lines):
                     if ln[0] == level + 1 and ln[1] == 0:
@@ -464,14 +519,16 @@ def _run_curses_ui(
                             cursor = li2
                             break
             elif key in (curses.KEY_BACKSPACE, 127, 8, ord("u"), ord("x")):
-                if level > 0:
-                    if key == ord("x"):
-                        # fold just this node, keep its siblings open
-                        acc.collapse_node(level, sib_idx)
-                    else:
-                        acc.collapse(level - 1)
+                if key == ord("x") or sib_idx in acc.expanded.get(level, ()):
+                    # fold this node itself, keep its siblings open
+                    acc.collapse_node(level, sib_idx)
                     lines = render_lines(entry, adj, acc.expanded)
-                    # land on the folded node's parent
+                    for li2, ln in enumerate(lines):
+                        if ln[2] == addr:
+                            cursor = li2
+                            break
+                elif level > 0:
+                    # already folded: move up to the parent
                     for li2, ln in enumerate(lines):
                         if ln[2] == parent:
                             cursor = li2

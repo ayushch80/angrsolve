@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from angrsolve.cfgview import Accordion, Snapshot, format_line, make_observer, render_lines
+from angrsolve.cfgview import (
+    Accordion,
+    Snapshot,
+    compute_dead,
+    expand_with_ancestors,
+    format_line,
+    make_observer,
+    render_lines,
+)
 
 
 def _graph() -> tuple:
@@ -99,7 +107,38 @@ def test_format_line_collapsed_count_and_find() -> None:
     assert text == "F0x1100 ▸+3"
 
 
-def test_observer_updates_snapshot() -> None:
+def test_expand_with_ancestors_opens_chain() -> None:
+    entry, adj = _graph()
+    acc = Accordion()
+    # A1 is invisible while the root is folded; expanding it directly
+    # must open the root too.
+    lines = render_lines(entry, adj, acc.expanded)
+    by_addr = {ln[2]: ln for ln in lines}
+    # A is a collapsed child line here: (level 1, idx 0, parent entry)
+    expand_with_ancestors(acc, lines, 1, 0, 0x1100)
+    assert acc.expanded[0] == {0}
+    assert acc.expanded[1] == {0}
+    lines = render_lines(entry, adj, acc.expanded)
+    assert 0x1110 in [ln[2] for ln in lines]
+    assert by_addr[0x1100][5] == entry
+
+
+def test_compute_dead_marks_exhausted_subtrees() -> None:
+    entry, adj = _graph()
+    # A1 visited and idle, B never visited, entry has live state below.
+    dead = compute_dead(adj, {entry, 0x1100, 0x1110}, {entry})
+    assert dead == {0x1100, 0x1110}
+
+
+def test_compute_dead_ignores_live_subtrees() -> None:
+    entry, adj = _graph()
+    dead = compute_dead(adj, {entry, 0x1100, 0x1110}, {0x1110})
+    assert dead == set()
+
+
+def test_compute_dead_unvisited_not_dead() -> None:
+    entry, adj = _graph()
+    assert compute_dead(adj, set(), set()) == set()
     snap = Snapshot()
 
     class _S:
