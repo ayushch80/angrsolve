@@ -51,11 +51,17 @@ class Accordion:
         self.expanded.add(addr)
 
     def collapse_node(self, addr: int, adj: Dict[int, List[int]]) -> None:
+        seen = {addr}
         stack = [addr]
         while stack:
             a = stack.pop()
             self.expanded.discard(a)
-            stack.extend(adj.get(a, []))
+            for k in adj.get(a, []):
+                # CFGs have cycles: without `seen` a latch re-adds its
+                # head forever and the UI thread never returns.
+                if k not in seen:
+                    seen.add(k)
+                    stack.append(k)
 
 
 def render_lines(

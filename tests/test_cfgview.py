@@ -207,6 +207,23 @@ def test_render_terminates_on_cycle() -> None:
     assert [ln[2] for ln in lines] == [head, body, head, body]
 
 
+def test_collapse_node_terminates_on_cycle() -> None:
+    # Regression: the fold BFS re-added latch<->head forever on cyclic
+    # graphs, freezing the UI thread on Bksp.  Run it in a thread so a
+    # regression fails instead of hanging the suite.
+    import threading
+
+    acc = Accordion()
+    adj = {0x1000: [0x1100], 0x1100: [0x1000]}
+    acc.expand(0x1000)
+    acc.expand(0x1100)
+    t = threading.Thread(target=acc.collapse_node, args=(0x1000, adj))
+    t.start()
+    t.join(5.0)
+    assert not t.is_alive()
+    assert acc.expanded == set()
+
+
 def test_format_line_branch_split() -> None:
     text = format_line(0x1100, "", 1, True, False, (False,), 200)
     assert text == "  ├─0x1100"
