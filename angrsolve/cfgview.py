@@ -34,32 +34,30 @@ logger = logging.getLogger("angrsolve")
 # --------------------------------------------------------------------------
 
 class Accordion:
-    """Set of expanded nodes per depth level.
+    """Set of expanded block addresses.
 
-    Expanding never collapses anything: ``expand(level, idx)`` only adds.
-    ``collapse(level)`` drops that level and everything below;
-    ``collapse_node(level, idx)`` drops a single node.
+    Keyed by address (not position): sibling indices repeat under every
+    parent, so position keys leak expansion state across subtrees.
+    Expanding never collapses anything.  Folding a node also drops all
+    of its descendants so re-expanding starts clean.
     """
 
     def __init__(self) -> None:
-        self.expanded: Dict[int, Set[int]] = {}
+        self.expanded: Set[int] = set()
 
-    def expand(self, level: int, idx: int) -> None:
-        self.expanded.setdefault(level, set()).add(idx)
+    def expand(self, addr: int) -> None:
+        self.expanded.add(addr)
 
-    def collapse(self, level: int) -> None:
-        for lv in [lv for lv in self.expanded if lv >= level]:
-            del self.expanded[lv]
-
-    def collapse_node(self, level: int, idx: int) -> None:
-        if level in self.expanded:
-            self.expanded[level].discard(idx)
-            if not self.expanded[level]:
-                del self.expanded[level]
+    def collapse_node(self, addr: int, adj: Dict[int, List[int]]) -> None:
+        stack = [addr]
+        while stack:
+            a = stack.pop()
+            self.expanded.discard(a)
+            stack.extend(adj.get(a, []))
 
 
 def render_lines(
-    entry: int, adj: Dict[int, List[int]], expanded: Dict[int, Set[int]]
+    entry: int, adj: Dict[int, List[int]], expanded: Set[int]
 ) -> List[tuple]:
     """Flatten the accordion-unfolded tree into visible lines.
 
@@ -83,7 +81,7 @@ def render_lines(
         lines.append((level, sib_idx, addr, last, cont, parent, branch))
         kids = adj.get(addr, [])
         kid_cont_base = cont + (not last,)
-        if sib_idx in expanded.get(level, ()):
+        if addr in expanded:
             for i, k in enumerate(kids):
                 # A child's continuation segments describe its ancestors:
                 # the parent contributes only if it has a following sibling.
@@ -146,25 +144,18 @@ class Snapshot:
     current_input: Optional[dict] = None
 
 
-def expand_with_ancestors(
-    acc: Accordion, lines: List[tuple], level: int, sib_idx: int, addr: int
-) -> None:
+def expand_with_ancestors(acc: Accordion, lines: List[tuple], addr: int) -> None:
     """Expand a node and every folded ancestor up to the root.
 
     render_lines descends top-down, so expanding a node whose parent is
     folded would show nothing.  Walk the parent links in `lines` and
     expand the whole chain.
     """
-    by_addr = {ln[2]: (ln[0], ln[1], ln[5]) for ln in lines}
-    lv, ix, a = level, sib_idx, addr
-    while True:
-        acc.expand(lv, ix)
-        if lv == 0:
-            break
-        info = by_addr.get(a)
-        if info is None or info[2] is None or info[2] not in by_addr:
-            break
-        lv, ix, a = by_addr[info[2]][0], by_addr[info[2]][1], info[2]
+    parent_of = {ln[2]: ln[5] for ln in lines}  # addr -> parent addr
+    a: Optional[int] = addr
+    while a is not None:
+        acc.expand(a)
+        a = parent_of.get(a)
 
 
 def compute_dead(
@@ -418,7 +409,7 @@ def _run_curses_ui(
                     break
                 level, sib_idx, addr, last, cont, parent, branch = lines[li]
                 kids = adj.get(addr, [])
-                is_exp = bool(kids) and sib_idx in acc.expanded.get(level, ())
+                is_exp = bool(kids) and addr in acc.expanded
                 text = format_line(
                     addr, _marks(addr, snap_data, finds, avoids),
                     len(kids), is_exp, last, cont, 10**9,
@@ -469,6 +460,10 @@ def _run_curses_ui(
                 status("rebuilding CFG\u2026")
                 stdscr.refresh()
                 entry, adj = build_graph(proj)
+                known = set(adj)
+                for kids in adj.values():
+                    known.update(kids)
+                acc.expanded.intersection_update(known)
                 status(f"graph reloaded: {len(adj)} blocks")
                 continue
             if key in (ord("["), ord("{")):
@@ -510,7 +505,7 @@ def _run_curses_ui(
                     continue
                 # Expand the node plus any folded ancestors, otherwise
                 # the flag lands in a folded subtree and nothing shows.
-                expand_with_ancestors(acc, lines, level, sib_idx, addr)
+                expand_with_ancestors(acc, lines, addr)
                 lines = render_lines(entry, adj, acc.expanded)
                 for li2, ln in enumerate(lines):
                     if ln[0] == level + 1 and ln[1] == 0:
@@ -519,9 +514,10 @@ def _run_curses_ui(
                             cursor = li2
                             break
             elif key in (curses.KEY_BACKSPACE, 127, 8, ord("u"), ord("x")):
-                if key == ord("x") or sib_idx in acc.expanded.get(level, ()):
-                    # fold this node itself, keep its siblings open
-                    acc.collapse_node(level, sib_idx)
+                if key == ord("x") or addr in acc.expanded:
+                    # fold this node itself (plus descendants), keep its
+                    # siblings open
+                    acc.collapse_node(addr, adj)
                     lines = render_lines(entry, adj, acc.expanded)
                     for li2, ln in enumerate(lines):
                         if ln[2] == addr:
