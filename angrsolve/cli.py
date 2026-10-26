@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
-import sys
 from typing import List, Optional
 
 from angrsolve.constraints import ConstraintConfig
@@ -197,17 +195,24 @@ def build_input_configs(args: argparse.Namespace) -> List[InputConfig]:
     configs: List[InputConfig] = []
 
     if args.stdin is not None:
+        if args.stdin <= 0:
+            raise ValueError(f"--stdin size must be positive, got {args.stdin}")
         configs.append(InputConfig(source="stdin", size=args.stdin))
 
     if args.argv is not None:
+        if args.argv <= 0:
+            raise ValueError(f"--argv size must be positive, got {args.argv}")
         configs.append(InputConfig(source="argv", size=args.argv))
 
     for fname, fsize in args.files:
+        if not fname:
+            raise ValueError("--file requires a non-empty filename")
         try:
             size = int(fsize)
         except ValueError:
-            logging.getLogger("angrsolve").error("Invalid file size: %s", fsize)
-            sys.exit(1)
+            raise ValueError(f"Invalid file size: {fsize}")
+        if size <= 0:
+            raise ValueError(f"--file size must be positive, got {fsize}")
         configs.append(InputConfig(source="file", size=size, filename=fname))
 
     return configs
@@ -220,11 +225,22 @@ def _parse_custom_bytes(spec: str) -> List[int]:
         token = token.strip()
         if not token:
             continue
-        if "-" in token:
-            lo_s, hi_s = token.split("-", 1)
-            values.extend(range(int(lo_s, 0), int(hi_s, 0) + 1))
-        else:
-            values.append(int(token, 0))
+        try:
+            if "-" in token:
+                lo_s, hi_s = token.split("-", 1)
+                lo, hi = int(lo_s, 0), int(hi_s, 0)
+                if lo > hi:
+                    raise ValueError(f"reversed range '{token}'")
+                values.extend(range(lo, hi + 1))
+            else:
+                values.append(int(token, 0))
+        except ValueError as e:
+            raise ValueError(f"Invalid --custom-bytes token '{token}': {e}")
+    for v in values:
+        if not 0 <= v <= 255:
+            raise ValueError(f"--custom-bytes value out of range 0-255: {v}")
+    if not values:
+        raise ValueError(f"--custom-bytes spec '{spec}' contains no byte values")
     return values
 
 
@@ -234,6 +250,12 @@ def build_constraint_config(args: argparse.Namespace) -> ConstraintConfig:
 
 
 def build_explore_config(args: argparse.Namespace) -> ExploreConfig:
+    if args.timeout is not None and args.timeout <= 0:
+        raise ValueError(f"--timeout must be positive, got {args.timeout}")
+    for name in ("max_depth", "max_active", "max_steps"):
+        value = getattr(args, name, None)
+        if value is not None and value < 1:
+            raise ValueError(f"--{name.replace('_', '-')} must be >= 1, got {value}")
     return ExploreConfig(
         timeout=args.timeout,
         max_depth=args.max_depth,

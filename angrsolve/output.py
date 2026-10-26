@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
@@ -32,6 +33,8 @@ def _bold(text: str) -> str:
 
 COLOR_ENABLED = True
 
+logger = logging.getLogger("angrsolve")
+
 
 def enable_color(enabled: bool = True) -> None:
     global COLOR_ENABLED
@@ -62,10 +65,10 @@ class Solution:
         result: Dict[str, Any] = {
             "find_addr": hex(self.find_addr),
             "find_name": self.find_name,
-            "stdin": self.stdin.hex() if self.stdin else None,
-            "argv": self.argv.hex() if self.argv else None,
+            "stdin": self.stdin.hex() if self.stdin is not None else None,
+            "argv": self.argv.hex() if self.argv is not None else None,
             "files": {k: v.hex() for k, v in self.files.items()},
-            "generic": self.generic.hex() if self.generic else None,
+            "generic": self.generic.hex() if self.generic is not None else None,
             "active_states": self.active_states,
             "explored_states": self.explored_states,
             "timing_ms": self.timing_ms,
@@ -143,8 +146,12 @@ def output_solution(
             payload = next(iter(solution.files.values()))
 
         if payload is not None:
-            with open(save_path, "wb") as f:
-                f.write(payload)
+            try:
+                with open(save_path, "wb") as f:
+                    f.write(payload)
+            except OSError as e:
+                logger.error("Could not save payload to %s: %s", save_path, e)
+                return
             print(colorize(f"[*] Payload saved to {save_path}", _green), file=sys.stderr)
 
 

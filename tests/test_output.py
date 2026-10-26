@@ -24,9 +24,11 @@ class TestColorize:
 
     def test_color_disabled(self) -> None:
         enable_color(False)
-        result = colorize("hello", lambda t: f"\033[92m{t}\033[0m")
-        assert result == "hello"
-        enable_color(True)  # restore
+        try:
+            result = colorize("hello", lambda t: f"\033[92m{t}\033[0m")
+            assert result == "hello"
+        finally:
+            enable_color(True)
 
 
 class TestSolutionToJson:

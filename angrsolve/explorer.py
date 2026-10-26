@@ -29,12 +29,7 @@ class ExploreConfig:
     use_unicorn: bool = False
 
 
-_EXPLORE_TIMED_OUT = False
-
-
 def _timeout_handler(signum: int, frame: Any) -> None:
-    global _EXPLORE_TIMED_OUT
-    _EXPLORE_TIMED_OUT = True
     raise TimeoutError("Exploration timed out")
 
 
@@ -86,7 +81,8 @@ def _extract_file(state: angr.SimState, sf: SymbolicFile) -> Optional[bytes]:
             if sim_file_obj is None:
                 return None
             return state.solver.eval(sim_file_obj.content, cast_to=bytes)
-        except Exception:
+        except Exception as e:
+            logger.debug("file extraction fallback failed: %s", e)
             return None
     try:
         raw = state.solver.eval(sf.sym_content, cast_to=bytes)
@@ -165,9 +161,6 @@ def explore(
     cfg: ExploreConfig,
 ) -> Optional[Solution]:
     """Run the exploration and return a *Solution* if found."""
-    global _EXPLORE_TIMED_OUT
-    _EXPLORE_TIMED_OUT = False
-
     start = time.time()
     logger.info("[+] Beginning exploration")
 
@@ -186,7 +179,7 @@ def explore(
         simgr.active_state_limit = cfg.max_active
 
     if cfg.max_depth is not None:
-        simgr.use_technique(angr.exploration_techniques.LengthLimiter(cfg.max_depth, drop=True))
+        simgr.use_technique(angr.exploration_techniques.LengthLimiter(max_length=cfg.max_depth, drop=True))
 
     # Set up a step_func callback that checks timeout and logs progress.
     step_counts: List[int] = [0]
@@ -230,14 +223,14 @@ def explore(
         logger.info("[!] Exploration timed out after %.1f s", cfg.timeout)
     except KeyboardInterrupt:
         logger.info("[!] Interrupted by user")
-    except Exception as e:
-        logger.info("[!] Exploration error: %s", e)
+    except Exception:
+        logger.warning("[!] Exploration error", exc_info=True)
     finally:
         if cfg.timeout is not None:
             signal.alarm(0)
 
     elapsed = (time.time() - start) * 1000.0
-    found_states = list(simgr._stashes.get("found", []))
+    found_states = list(simgr.stashes.get("found", []))
     explored_total = (
         len(simgr.active)
         + len(simgr.deadended)
@@ -302,4 +295,4 @@ def explore(
 
 
 def _stash_count(simgr: angr.sim_manager.SimulationManager, name: str) -> int:
-    return len(simgr._stashes.get(name, []))
+    return len(simgr.stashes.get(name, []))

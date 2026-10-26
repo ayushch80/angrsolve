@@ -34,7 +34,7 @@ Requires Python 3.8+ and angr 9.2+. See [DOCS.md](DOCS.md) for detailed docs.
 | Gatekeeper    | CyLab (picoCTF)   | medium     | stdin      |
 | file-run2     | CyLab (picoCTF)   | medium     | argv       |
 | Bbbbloat      | CyLab (picoCTF)   | medium     | stdin      |
-| Keygenme      | CyLab (picoCTF)   | hard       | stdin      |
+| Keygenme      | CyLab (picoCTF)   | hard       | stdin (excluded from automated solves: needs libcrypto MD5) |
 | Totally Legit | h7ctf finals 2026 | medium     | stdin      |
 
 ## Documentation

@@ -147,6 +147,8 @@ def _create_stdin(
     stdin = claripy.Concat(*sym_bytes)
 
     fd = state.posix.get_fd(0)
+    if fd is None:
+        raise RuntimeError("Could not access stdin file descriptor in symbolic state")
     fd.write_data(stdin)
     fd.seek(0)
 

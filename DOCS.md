@@ -72,6 +72,8 @@ Requirements file:
 ```
 angr>=9.2,<10.0
 claripy>=9.2,<10.0
+bitstring==4.4.0  # pyvex 9.x needs ConstBitStream, removed in bitstring 5.x
+pycparser==3.0  # angr 9.x SimTypeCParser breaks on pycparser>=3.1 (CLexer not callable)
 pytest>=9.0
 ```
 
@@ -102,10 +104,12 @@ angrsolve BINARY [OPTIONS]
 | `--find ADDR/SYM` | Target address or symbol to find (can repeat) |
 | `--avoid ADDR/SYM` | Addresses/symbols to avoid (can repeat) |
 | `--no-auto-avoid` | Disable automatic detection of failure functions |
+| `--auto-avoid` | Enable automatic detection of failure functions (default) |
 | `--stdin SIZE` | Symbolic stdin buffer of SIZE bytes |
 | `--argv SIZE` | Symbolic argv[1] of SIZE bytes |
 | `--file NAME SIZE` | Symbolic file with name and size (can repeat) |
 | `--mode MODE` | Constraint mode: `printable`, `alphanumeric`, `letters`, `digits`, `unrestricted` |
+| `--custom-bytes SPEC` | Custom allowed bytes, e.g. `0x20,0x30-0x40` (values 0-255) |
 | `--unicorn` | Enable Unicorn engine for faster exploration |
 | `--veritesting` | Enable veritesting for better path merging |
 | `--timeout SECONDS` | Exploration timeout in seconds |
@@ -359,6 +363,7 @@ python angrsolve.py ./chall --find win --stdin 64 --json
   "stdin": null,
   "argv": "733363723374",
   "files": {},
+  "generic": null,
   "active_states": 0,
   "explored_states": 1,
   "timing_ms": 8819.5
@@ -381,7 +386,7 @@ When no solution is found:
 python angrsolve.py ./chall --find win --stdin 64 --save payload.bin
 ```
 
-Saves the raw payload bytes to a file. The payload is chosen in priority order: stdin → argv → first file. If no payload is available, the file is not created.
+Saves the raw payload bytes to a file. The payload is chosen in priority order: stdin → argv → generic → first file. If no payload is available, the file is not created.
 
 ---
 
@@ -585,6 +590,7 @@ $ python angrsolve.py ./chall --find win --argv 32 --json
   "stdin": null,
   "argv": "733363723374",
   "files": {},
+  "generic": null,
   "active_states": 0,
   "explored_states": 1,
   "timing_ms": 8819.5
@@ -652,7 +658,7 @@ CLI args → parse_args()
 ### Running tests
 
 ```bash
-# Full test suite (135 tests)
+# Full test suite (159 tests)
 pytest -v
 
 # Fast unit tests only (utils, constraints, cli, output)
@@ -691,10 +697,11 @@ A pre-commit hook (`.githooks/pre-commit`) runs `python3 -m py_compile` on all s
 git config core.hooksPath .githooks
 ```
 
-GitHub Actions runs three parallel jobs on every push/PR:
+GitHub Actions runs four parallel jobs on every push/PR:
 
 | Job | What it runs | Approx time |
 |-----|-------------|-------------|
 | `lint` | `python3 -m py_compile` on all `.py` files | 10 s |
-| `unit-tests` | Fast tests (utils, constraints, cli, output) | 10 s |
+| `unit-tests` | Fast tests (utils, constraints, cli, output, challenge manifest) | 1 min |
 | `integration-tests` | Loader, input setup, exploration + compiled test binaries | 2 min |
+| `challenge-solves` | End-to-end solves of committed `challenges/` via manifest | ~5 min |

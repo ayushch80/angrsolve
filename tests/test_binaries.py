@@ -112,7 +112,7 @@ int main(int argc, char **argv) {
     return _cc(
         "t_pie_argv",
         src,
-        flags=["-pie", "-fno-stack-protector", "-O0"],
+        flags=["-fPIE", "-pie", "-fno-stack-protector", "-O0"],
     )
 
 
