@@ -84,7 +84,7 @@ Four parallel jobs run on every push/PR:
 |-----|-------------|-------------|
 | `lint` | `python3 -m py_compile` on every `.py` file | 10 s |
 | `unit-tests` | Fast tests (utils, constraints, cli, output) + manifest validation (`-m "not slow"`) | 1 min |
-| `integration-tests` | Loader, input setup, exploration + auto-created test binaries | 2 min |
+| `integration-tests` | Loader, input setup, exploration, compiled-binary suite incl. stripped | 2 min |
 | `challenge-solves` | End-to-end solves of committed `challenges/` via manifest (`-m slow`, 30 min cap) | ~5 min |
 
 ## Code Conventions

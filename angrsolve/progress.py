@@ -26,7 +26,7 @@ class ProgressTracker:
     _last: float = 0.0
 
     def sample(self, step: int, simgr: Any, started: float) -> bool:
-        now = time.time()
+        now = time.monotonic()
         if self.samples and (now - self._last) < self.min_interval:
             return False
         self._last = now
@@ -59,12 +59,12 @@ class ProgressDisplay:
         # Gate on TTY so CI logs and piped output stay clean.
         self.enabled = enabled and sys.stderr.isatty()
         self.timeout = timeout
-        self._started = time.time()
+        self._started = time.monotonic()
 
     def update(self, step: int, simgr: Any) -> None:
         if not self.enabled:
             return
-        elapsed = time.time() - self._started
+        elapsed = time.monotonic() - self._started
         try:
             active = len(simgr.active)
             found = len(simgr.stashes.get("found", []))
@@ -83,7 +83,7 @@ class ProgressDisplay:
     def finish(self, steps: int, found: bool) -> None:
         if not self.enabled:
             return
-        elapsed = time.time() - self._started
+        elapsed = time.monotonic() - self._started
         sys.stderr.write(
             f"\n[+] exploration done: {steps} steps, "
             f"{'solution found' if found else 'no solution'} in {elapsed:.1f}s\n"
@@ -114,7 +114,7 @@ canvas{{width:100%;height:220px;border:1px solid #999}}</style></head>
 const S = {data};
 const c = document.getElementById('c'), x = c.getContext('2d');
 const maxT = Math.max(...S.map(p => p.t), 1);
-const maxN = Math.max(...S.map(p => Math.max(p.active, p.deadended)), 1);
+const maxN = Math.max(...S.map(p => Math.max(p.active, p.deadended, p.found)), 1);
 function line(key, color) {{
   x.strokeStyle = color; x.beginPath();
   S.forEach((p, i) => {{
@@ -132,5 +132,5 @@ x.fillStyle = '#000'; x.fillText('found', 160, 12);
 x.fillStyle = '#0a0'; x.fillRect(195, 4, 12, 8);
 </script></body></html>
 """
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(page)

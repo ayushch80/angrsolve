@@ -35,7 +35,7 @@ class ExploreConfig:
     cfg_view: bool = False
     # Optional callable invoked from the step hook as observer(step, simgr).
     # Used by experimental live views (progress panel, CFG view).
-    observer: Optional[Callable[[int, Any], None]] = None
+    observer: Optional[Callable[[int, Any], Optional[bool]]] = None
 
 
 def _timeout_handler(signum: int, frame: Any) -> None:
@@ -170,7 +170,7 @@ def explore(
     cfg: ExploreConfig,
 ) -> Optional[Solution]:
     """Run the exploration and return a *Solution* if found."""
-    start = time.time()
+    start = time.monotonic()
     logger.info("[+] Beginning exploration")
 
     state = input_setup.state
@@ -193,7 +193,7 @@ def explore(
     # Set up a step_func callback that checks timeout and logs progress.
     step_counts: List[int] = [0]
     timed_out: List[bool] = [False]
-    start_time: float = time.time()
+    start_time: float = time.monotonic()
 
     # EXPERIMENTAL progress telemetry: sampled from this hook so the
     # overhead stays flat (one sample per >=0.25 s, not per step).
@@ -218,7 +218,7 @@ def explore(
                 display.update(step_counts[0], simgr_inner)
         elif tracker is not None:
             tracker.sample(step_counts[0], simgr_inner, start_time)
-        if cfg.timeout is not None and (time.time() - start_time) > cfg.timeout:
+        if cfg.timeout is not None and (time.monotonic() - start_time) > cfg.timeout:
             timed_out[0] = True
             return True  # return True to stop exploration
         if cfg.max_steps is not None and step_counts[0] >= cfg.max_steps:
@@ -242,12 +242,15 @@ def explore(
         if avoid:
             explore_kwargs["avoid"] = avoid
 
+        old_handler: Any = None
+        armed = False
         if cfg.timeout is not None and threading.current_thread() is threading.main_thread():
             # Use signal-based timeout for hard kill.  Skipped off the main
             # thread (e.g. experimental CFG view runs explore in a worker)
             # because the alarm would fire in the wrong thread.
-            signal.signal(signal.SIGALRM, _timeout_handler)
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
             signal.alarm(int(cfg.timeout) + 1)
+            armed = True
 
         simgr.explore(step_func=_step_func, **explore_kwargs)
 
@@ -258,10 +261,12 @@ def explore(
     except Exception:
         logger.warning("[!] Exploration error", exc_info=True)
     finally:
-        if cfg.timeout is not None:
+        if armed:
             signal.alarm(0)
+            if old_handler is not None:
+                signal.signal(signal.SIGALRM, old_handler)
 
-    elapsed = (time.time() - start) * 1000.0
+    elapsed = (time.monotonic() - start) * 1000.0
     found_states = list(simgr.stashes.get("found", []))
 
     if display is not None:

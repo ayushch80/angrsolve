@@ -10,7 +10,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python3 -m py_compile angrsolve/__init__.py angrsolve/cli.py angrsolve/constraints.py angrsolve/explorer.py angrsolve/inputs.py angrsolve/loader.py angrsolve/output.py angrsolve/utils.py angrsolve.py tests/conftest.py tests/test_binaries.py tests/test_challenges.py tests/test_cli.py tests/test_constraints.py tests/test_explorer.py tests/test_inputs.py tests/test_integration.py tests/test_loader.py tests/test_output.py tests/test_utils.py
+      - run: python3 -m py_compile angrsolve/__init__.py angrsolve/cfgview.py angrsolve/cli.py angrsolve/constraints.py angrsolve/explorer.py angrsolve/inputs.py angrsolve/loader.py angrsolve/output.py angrsolve/progress.py angrsolve/utils.py angrsolve.py tests/conftest.py tests/test_binaries.py tests/test_cfgview.py tests/test_challenges.py tests/test_cli.py tests/test_constraints.py tests/test_explorer.py tests/test_inputs.py tests/test_integration.py tests/test_loader.py tests/test_output.py tests/test_progress.py tests/test_utils.py
 
   unit-tests:
     runs-on: ubuntu-latest
@@ -30,11 +30,11 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install system deps
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc binutils
       - name: Install Python deps
         run: pip install -r requirements.txt
       - name: Run integration tests
-        run: python3 -m pytest tests/test_loader.py tests/test_inputs.py tests/test_explorer.py -v
+        run: python3 -m pytest tests/test_loader.py tests/test_inputs.py tests/test_explorer.py tests/test_binaries.py -v
 
   challenge-solves:
     runs-on: ubuntu-latest
