@@ -1,3 +1,5 @@
 angr>=9.2,<10.0
 claripy>=9.2,<10.0
+bitstring==4.4.0  # pyvex 9.x needs ConstBitStream, removed in bitstring 5.x
+pycparser==3.0  # angr 9.x SimTypeCParser breaks on pycparser>=3.1 (CLexer not callable)
 pytest>=9.0

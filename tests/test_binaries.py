@@ -1,20 +1,12 @@
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
-from typing import Dict
 
 import pytest
 
-
-# ---------------------------------------------------------------------------
-# Helper: compile C source via explicit gcc command, cache on disk
-# ---------------------------------------------------------------------------
-
-_COMPILED: Dict[str, Path] = {}
+from tests.conftest import compile_c
 
 
 def _cc(
@@ -22,30 +14,8 @@ def _cc(
     src: str,
     flags: list[str] | None = None,
 ) -> Path:
-    """Compile *src* to *name* with *flags* (default ``["-o", dst, "-x", "c", "-"]``).
-
-    The compiled binary is cached in the system temp directory so that
-    re-runs skip compilation.
-    """
-    cache_key = f"{name}_{' '.join(flags or [])}"
-    if cache_key in _COMPILED:
-        return _COMPILED[cache_key]
-
-    dst = Path(tempfile.gettempdir()) / name
-    cmd = ["gcc"]
-    if flags:
-        cmd.extend(flags)
-    cmd.extend(["-o", str(dst), "-x", "c", "-"])
-
-    subprocess.run(
-        cmd,
-        input=src,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    _COMPILED[cache_key] = dst
-    return dst
+    """Compile *src* deterministically (rebuilds when src/flags change)."""
+    return compile_c(src, name, flags=flags)
 
 
 def _run_angrsolve(args: list[str]) -> subprocess.CompletedProcess:
@@ -163,6 +133,30 @@ int main(int argc, char **argv) {
         "t_stripped",
         src,
         flags=["-no-pie", "-fno-stack-protector", "-O0", "-s"],
+    )
+
+
+@pytest.fixture(scope="session")
+def stripped_bin_twin() -> Path:
+    """Unstripped twin of ``stripped_bin`` (same flags minus ``-s``).
+
+    ``-s`` only removes the symbol table; ``.text`` layout is identical,
+    so addresses resolved here apply to the stripped binary too.
+    """
+    src = r"""
+#include <string.h>
+#include <stdio.h>
+void win(void) { puts("win"); }
+int main(int argc, char **argv) {
+    if (argc < 2) return 1;
+    if (strcmp(argv[1], "stripped!") == 0) win();
+    return 0;
+}
+"""
+    return _cc(
+        "t_stripped_twin",
+        src,
+        flags=["-no-pie", "-fno-stack-protector", "-O0"],
     )
 
 
@@ -285,23 +279,27 @@ class TestPie:
 
 
 class TestStripped:
-    def test_find_by_address(self, stripped_bin: Path) -> None:
-        # We don't know the address of win ahead of time because it's
-        # stripped.  Run `nm` to discover it, then feed it to angrsolve.
+    def test_find_by_address(self, stripped_bin: Path, stripped_bin_twin: Path) -> None:
+        # No symbol table, so resolve win's address from the unstripped
+        # twin (identical .text layout) and use the raw address.
         nm = subprocess.run(
-            ["objdump", "-t", str(stripped_bin)],
-            capture_output=True, text=True, check=True,
+            ["nm", str(stripped_bin_twin)], capture_output=True, text=True
         )
-        # Find the address in the disassembly — after stripping, the
-        # function names are gone so we search for "win" as a string
-        # reference.  Realistically this doesn't work, so instead just
-        # test that --find with a random hex address doesn't crash.
+        win_addr: str | None = None
+        for line in nm.stdout.splitlines():
+            parts = line.split()
+            if len(parts) == 3 and parts[2] == "win":
+                win_addr = "0x" + parts[0]
+                break
+        if win_addr is None:
+            pytest.skip("could not determine win address")
+
         result = _run_angrsolve([
-            str(stripped_bin), "--find", "main",
+            str(stripped_bin), "--find", win_addr,
             "--argv", "32", "--no-color", "-q",
         ])
-        # main is also stripped, so expect error exit but not a crash
-        assert result.returncode == 1
+        assert result.returncode == 0, result.stderr
+        assert "Solution found" in result.stdout
 
     def test_find_by_symbol_fails_on_stripped(self, stripped_bin: Path) -> None:
         result = _run_angrsolve([
