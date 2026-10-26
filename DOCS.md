@@ -117,6 +117,8 @@ angrsolve BINARY [OPTIONS]
 | `--max-active N` | Maximum active states |
 | `--max-steps N` | Maximum exploration steps |
 | `--save FILE` | Save the payload to a file |
+| `--progress` | EXPERIMENTAL: live exploration progress display (TTY only) |
+| `--progress-report FILE` | EXPERIMENTAL: write a standalone HTML progress report |
 | `--json` | Output in JSON format |
 | `--no-color` | Disable colored terminal output |
 | `-v` / `-vv` / `-vvv` | Verbosity level (count-based) |

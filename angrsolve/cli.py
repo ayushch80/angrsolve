@@ -159,6 +159,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Disable colored terminal output",
     )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        default=False,
+        help="EXPERIMENTAL: live exploration progress display (TTY only)",
+    )
+    parser.add_argument(
+        "--progress-report",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="EXPERIMENTAL: write a standalone HTML progress report to FILE",
+    )
 
     # Logging / verbosity
     parser.add_argument(
@@ -263,4 +276,7 @@ def build_explore_config(args: argparse.Namespace) -> ExploreConfig:
         max_steps=args.max_steps,
         veritesting=args.veritesting,
         use_unicorn=args.unicorn,
+        progress=args.progress,
+        progress_report=args.progress_report,
+        quiet=args.quiet,
     )

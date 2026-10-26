@@ -11,6 +11,7 @@ import claripy
 
 from angrsolve.inputs import InputSetup, SymbolicFile
 from angrsolve.output import Solution
+from angrsolve.progress import ProgressDisplay, ProgressTracker, write_html_report
 
 logger = logging.getLogger("angrsolve")
 
@@ -27,6 +28,9 @@ class ExploreConfig:
     max_steps: Optional[int] = None
     veritesting: bool = False
     use_unicorn: bool = False
+    progress: bool = False
+    progress_report: Optional[str] = None
+    quiet: bool = False
 
 
 def _timeout_handler(signum: int, frame: Any) -> None:
@@ -186,8 +190,23 @@ def explore(
     timed_out: List[bool] = [False]
     start_time: float = time.time()
 
+    # EXPERIMENTAL progress telemetry: sampled from this hook so the
+    # overhead stays flat (one sample per >=0.25 s, not per step).
+    track_progress = cfg.progress or cfg.progress_report is not None
+    tracker = ProgressTracker() if track_progress else None
+    display = (
+        ProgressDisplay(enabled=cfg.progress and not cfg.quiet, timeout=cfg.timeout)
+        if track_progress
+        else None
+    )
+
     def _step_func(simgr_inner: Any) -> bool:
         step_counts[0] += 1
+        if tracker is not None and display is not None:
+            if tracker.sample(step_counts[0], simgr_inner, start_time):
+                display.update(step_counts[0], simgr_inner)
+        elif tracker is not None:
+            tracker.sample(step_counts[0], simgr_inner, start_time)
         if cfg.timeout is not None and (time.time() - start_time) > cfg.timeout:
             timed_out[0] = True
             return True  # return True to stop exploration
@@ -231,6 +250,24 @@ def explore(
 
     elapsed = (time.time() - start) * 1000.0
     found_states = list(simgr.stashes.get("found", []))
+
+    if display is not None:
+        display.finish(step_counts[0], found=bool(found_states))
+    if tracker is not None and cfg.progress_report is not None:
+        try:
+            write_html_report(
+                cfg.progress_report,
+                tracker.samples,
+                {
+                    "steps": step_counts[0],
+                    "found": len(found_states),
+                    "active": len(simgr.active),
+                    "deadended": len(simgr.deadended),
+                    "timing_ms": round(elapsed, 1),
+                },
+            )
+        except OSError as e:
+            logger.error("Could not write progress report: %s", e)
     explored_total = (
         len(simgr.active)
         + len(simgr.deadended)
