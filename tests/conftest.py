@@ -130,7 +130,7 @@ int main(int argc, char **argv) {
     return 0;
 }
 """
-    return compile_c(src, "test_pie_bin", flags=["-pie"])
+    return compile_c(src, "test_pie_bin", flags=["-fPIE", "-pie"])
 
 
 @pytest.fixture(scope="session")

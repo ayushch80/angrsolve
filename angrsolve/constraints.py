@@ -59,7 +59,7 @@ class ConstraintConfig:
             return s
         if self.mode == "unrestricted":
             return set(range(256))
-        return set(string.printable.encode("ascii"))
+        raise ValueError(f"Unknown constraint mode: {self.mode}")
 
     def apply_to(self, sym_bytes: List[claripy.BVS]) -> List[claripy.BoolV]:
         """Build efficient range-based constraints for each symbolic byte.

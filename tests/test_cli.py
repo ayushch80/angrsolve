@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import argparse
+
+import pytest
+
 from angrsolve.cli import (
+    _parse_custom_bytes,
     build_constraint_config,
     build_explore_config,
     build_input_configs,
@@ -166,6 +171,26 @@ class TestBuildInputConfigs:
         sources = {c.source for c in configs}
         assert sources == {"stdin", "argv"}
 
+    def test_stdin_size_zero_rejected(self) -> None:
+        args = argparse.Namespace(stdin=0, argv=None, files=[])
+        with pytest.raises(ValueError):
+            build_input_configs(args)
+
+    def test_argv_size_negative_rejected(self) -> None:
+        args = argparse.Namespace(stdin=None, argv=-5, files=[])
+        with pytest.raises(ValueError):
+            build_input_configs(args)
+
+    def test_file_size_invalid_rejected(self) -> None:
+        args = argparse.Namespace(stdin=None, argv=None, files=[("f", "zz")])
+        with pytest.raises(ValueError):
+            build_input_configs(args)
+
+    def test_file_size_zero_rejected(self) -> None:
+        args = argparse.Namespace(stdin=None, argv=None, files=[("f", "0")])
+        with pytest.raises(ValueError):
+            build_input_configs(args)
+
 
 class TestBuildConstraintConfig:
     def test_mode(self) -> None:
@@ -179,6 +204,54 @@ class TestBuildConstraintConfig:
         args = parser.parse_args(["/bin/ls"])
         cc = build_constraint_config(args)
         assert cc.mode == "printable"
+
+    def test_custom_bytes(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["/bin/ls", "--custom-bytes", "0x41,0x42"])
+        cc = build_constraint_config(args)
+        assert cc.custom_bytes == [0x41, 0x42]
+
+    def test_custom_bytes_invalid(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["/bin/ls", "--custom-bytes", "zz"])
+        with pytest.raises(ValueError):
+            build_constraint_config(args)
+
+    def test_max_depth_zero_rejected(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["/bin/ls", "--max-depth", "0"])
+        with pytest.raises(ValueError):
+            build_explore_config(args)
+
+    def test_timeout_negative_rejected(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["/bin/ls", "--timeout", "-1"])
+        with pytest.raises(ValueError):
+            build_explore_config(args)
+
+
+class TestParseCustomBytes:
+    def test_single_values(self) -> None:
+        assert _parse_custom_bytes("66,0x42") == [66, 0x42]
+
+    def test_range(self) -> None:
+        assert _parse_custom_bytes("0x30-0x33") == [0x30, 0x31, 0x32, 0x33]
+
+    def test_bad_token_raises(self) -> None:
+        with pytest.raises(ValueError):
+            _parse_custom_bytes("zz")
+
+    def test_reversed_range_raises(self) -> None:
+        with pytest.raises(ValueError):
+            _parse_custom_bytes("0x40-0x30")
+
+    def test_out_of_range_raises(self) -> None:
+        with pytest.raises(ValueError):
+            _parse_custom_bytes("256")
+
+    def test_empty_spec_raises(self) -> None:
+        with pytest.raises(ValueError):
+            _parse_custom_bytes(" , ")
 
 
 class TestBuildExploreConfig:

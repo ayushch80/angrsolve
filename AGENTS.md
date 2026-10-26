@@ -78,7 +78,7 @@ python3 angrsolve.py /tmp/test_argv_bin --find win --argv 32 --no-color -q
 
 ## GitHub Actions (`.github/workflows/ci.yml`)
 
-Three parallel jobs run on every push/PR:
+Four parallel jobs run on every push/PR:
 
 | Job | What it runs | Approx time |
 |-----|-------------|-------------|

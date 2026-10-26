@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Set, Union
+import os
+from typing import Dict, List, Optional, Union
 
 import angr
+
+from angrsolve.utils import parse_address
 
 logger = logging.getLogger("angrsolve")
 
@@ -14,6 +17,8 @@ def load_binary(path: str) -> angr.Project:
     Sets ``auto_load_libs=False`` for performance and correctness.
     Automatically detects PIE and non-PIE binaries.
     """
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Binary not found: {path}")
     logger.info("[+] Loading binary: %s", path)
     return angr.Project(path, auto_load_libs=False)
 
@@ -44,9 +49,8 @@ def resolve_address(
         logger.info("[+] Target resolved: %s -> 0x%x", target, sym.rebased_addr)
         return sym.rebased_addr
 
-    try:
-        addr = int(target, 0)
-    except ValueError:
+    addr = parse_address(target)
+    if addr is None:
         logger.error("Could not resolve target: %s", target)
         return None
 
@@ -56,7 +60,7 @@ def resolve_address(
     return addr
 
 
-def resolve_auto_symbols(proj: angr.Project) -> Dict[str, int]:
+def resolve_auto_symbols(proj: angr.Project) -> Dict[str, List[int]]:
     """Automatically detect common success/failure symbols.
 
     Looks for well-known symbol names in the binary and returns a
@@ -66,7 +70,6 @@ def resolve_auto_symbols(proj: angr.Project) -> Dict[str, int]:
         "win",
         "success",
         "flag",
-        "print_flag",
         "print_flag",
         "give_flag",
         "correct",

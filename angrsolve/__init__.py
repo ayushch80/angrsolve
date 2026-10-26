@@ -23,8 +23,6 @@ def _setup_logging(verbose: int, quiet: bool) -> None:
         level = logging.NOTSET
     elif verbose == 2:
         level = logging.DEBUG
-    elif verbose >= 1:
-        level = logging.INFO
     else:
         level = logging.INFO
 
@@ -55,17 +53,38 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.no_color:
         enable_color(False)
 
+    try:
+        return _run(args)
+    except (ValueError, FileNotFoundError, OSError) as e:
+        logging.getLogger("angrsolve").error("Error: %s", e)
+        return 2
+    except Exception:
+        logging.getLogger("angrsolve").error("Unexpected error", exc_info=True)
+        return 1
+
+
+def _run(args) -> int:
+    # Validate user input before loading the binary.
+    input_configs = build_input_configs(args)
+    constraint_cfg = build_constraint_config(args)
+    explore_cfg = build_explore_config(args)
+
     proj = load_binary(args.binary)
 
     # Resolve find addresses.
     find_addresses = resolve_addresses(proj, args.find_targets)
+    if args.find_targets and not find_addresses:
+        logging.getLogger("angrsolve").error(
+            "None of the --find targets resolved; not falling back to auto-detect"
+        )
+        return 2
 
     # Resolve avoid addresses.
     avoid_addresses = resolve_addresses(proj, args.avoid_targets)
 
     # Auto-detect symbols if no --find was given.
+    auto = resolve_auto_symbols(proj)
     if not find_addresses:
-        auto = resolve_auto_symbols(proj)
         if auto["find"]:
             find_addresses = auto["find"]
             logging.getLogger("angrsolve").info(
@@ -79,7 +98,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
 
     if args.auto_avoid:
-        auto = resolve_auto_symbols(proj)
         avoid_set = set(avoid_addresses)
         for a in auto["avoid"]:
             if a not in avoid_set:
@@ -92,9 +110,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
 
     # Build configurations.
-    input_configs = build_input_configs(args)
-    constraint_cfg = build_constraint_config(args)
-    explore_cfg = build_explore_config(args)
     explore_cfg.find_addresses = find_addresses
     explore_cfg.avoid_addresses = avoid_addresses
 

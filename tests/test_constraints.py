@@ -4,6 +4,7 @@ import string
 from typing import Any
 
 import claripy
+import pytest
 
 from angrsolve.constraints import ConstraintConfig, _set_to_ranges
 
@@ -67,6 +68,11 @@ class TestConstraintConfig:
         cfg = ConstraintConfig(mode="unrestricted")
         allowed = cfg.build_allowed_set()
         assert len(allowed) == 256
+
+    def test_unknown_mode_raises(self) -> None:
+        cfg = ConstraintConfig(mode="bogus")
+        with pytest.raises(ValueError):
+            cfg.build_allowed_set()
 
     def test_custom_bytes(self) -> None:
         cfg = ConstraintConfig(mode="printable", custom_bytes=[0x41, 0x42])

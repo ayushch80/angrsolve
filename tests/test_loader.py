@@ -66,7 +66,8 @@ class TestResolveAutoSymbols:
     def test_finds_win_and_fail(self, argv_binary: str) -> None:
         proj = load_binary(str(argv_binary))
         result = resolve_auto_symbols(proj)
-        assert "win" in [proj.loader.find_symbol("win").name for _ in [1]]
+        assert proj.loader.find_symbol("win") is not None
+        assert proj.loader.find_symbol("win").name == "win"
         assert len(result["find"]) >= 1
         assert len(result["avoid"]) >= 1
 

@@ -6,6 +6,7 @@ from angrsolve.constraints import ConstraintConfig
 from angrsolve.explorer import ExploreConfig, explore
 from angrsolve.inputs import InputConfig, setup_input
 from angrsolve.loader import resolve_address
+from angrsolve.output import Solution
 
 
 class TestExplore:
@@ -111,9 +112,8 @@ class TestExplore:
         # Very short timeout to trigger
         explore_cfg = ExploreConfig(find_addresses=[find_addr], timeout=0.001)
         sol = explore(proj, input_setup, explore_cfg)
-        # With unrestricted, the solver might still find it but timeout could fire
-        # Just check it doesn't crash and returns either None or a Solution
-        assert sol is None or isinstance(sol, type(sol))
+        # Either the timeout fired or the tiny input solved it.
+        assert sol is None or isinstance(sol, Solution)
 
     def test_no_find_returns_none(self, argv_binary: str) -> None:
         proj = angr.Project(str(argv_binary), auto_load_libs=False)
