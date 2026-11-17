@@ -8,8 +8,11 @@ exploration:
 
     ``●`` active state here   ``·`` visited   ``F`` find target
     ``A`` avoid target        dimmed = subtree fully exhausted (dead)
+    ``L`` = on a loop path (red when the terminal supports colors)
     ``⟲→ADDR`` = repeating state (a loop back-edge to ancestor ADDR;
     the latch and its straight-line parents render in the loop color)
+    Collapsed nodes show only their own line: ``▸+N`` counts children
+    that stay hidden until you explicitly expand the node.
 
 Keys: ↑/↓ or k/j move, ←/→ or h/l siblings, Enter/Space expand the
 selected block, Backspace folds it (or jumps to its parent when already
@@ -40,8 +43,10 @@ class Accordion:
 
     Keyed by address (not position): sibling indices repeat under every
     parent, so position keys leak expansion state across subtrees.
-    Expanding never collapses anything.  Folding a node also drops all
-    of its descendants so re-expanding starts clean.
+    Expanding never collapses anything.  Folding a node drops it plus
+    the part of its downstream reachable only through it — blocks that
+    stay visible via another expanded path (shared joins, cycle
+    re-entries) keep their flags.
     """
 
     def __init__(self) -> None:
@@ -50,22 +55,39 @@ class Accordion:
     def expand(self, addr: int) -> None:
         self.expanded.add(addr)
 
-    def collapse_node(self, addr: int, adj: Dict[int, List[int]]) -> None:
-        seen = {addr}
-        stack = [addr]
+    def collapse_node(
+        self, entry: int, addr: int, adj: Dict[int, List[int]]
+    ) -> None:
+        # Drop the folded node itself, then keep exactly the expanded
+        # flags still on screen: nodes reachable from the root without
+        # passing through the folded node.  A shared join stays (it is
+        # reachable via its other parent) while exclusively-downstream
+        # blocks go; a cycle head stays (it is above the fold, not
+        # below it).  Roots the walk at `entry` so ancestors are never
+        # mistaken for descendants on cyclic graphs.
+        allowed = self.expanded - {addr}
+        if entry not in allowed:
+            self.expanded = set()
+            return
+        seen = {entry}
+        stack = [entry]
         while stack:
             a = stack.pop()
-            self.expanded.discard(a)
             for k in adj.get(a, []):
-                # CFGs have cycles: without `seen` a latch re-adds its
-                # head forever and the UI thread never returns.
-                if k not in seen:
+                if k in allowed and k not in seen:
                     seen.add(k)
                     stack.append(k)
+        self.expanded = seen
+
+
+_MAX_LINES = 20000
 
 
 def render_lines(
-    entry: int, adj: Dict[int, List[int]], expanded: Set[int]
+    entry: int,
+    adj: Dict[int, List[int]],
+    expanded: Set[int],
+    limit: int = _MAX_LINES,
 ) -> List[tuple]:
     """Flatten the accordion-unfolded tree into visible lines.
 
@@ -87,13 +109,17 @@ def render_lines(
         branch: int,
         path: frozenset = frozenset(),
     ) -> None:
+        if len(lines) >= limit:
+            return  # render budget: huge trees stay interactive
         lines.append((level, sib_idx, addr, last, cont, parent, branch))
         kids = adj.get(addr, [])
         kid_cont_base = cont + (not last,)
         # Never descend into an address already on the current path:
         # CFGs contain cycles, and expanding along one must terminate.
-        # The repeated block renders as a collapsed child line, which is
-        # exactly where the loop marker points.
+        # A collapsed node shows only its own line (``▸+N`` counts the
+        # hidden children) — nothing unfolds without explicit expansion,
+        # so the path-blocked repeat simply isn't rendered; the latch
+        # that closes the loop carries the loop marker instead.
         if addr in expanded and addr not in path:
             path = path | {addr}
             for i, k in enumerate(kids):
@@ -103,12 +129,7 @@ def render_lines(
                     k, level + 1, i, i == len(kids) - 1, kid_cont_base,
                     addr, branch if level > 0 else i, path,
                 )
-        else:
-            for i, k in enumerate(kids):
-                lines.append(
-                    (level + 1, i, k, i == len(kids) - 1,
-                     kid_cont_base, addr, branch if level > 0 else i)
-                )
+        # else: collapsed — own line only, children stay hidden.
 
     rec(entry, 0, 0, True, (), None, 0)
     return lines
@@ -179,8 +200,8 @@ def detect_loops(
     Keyed by line index: the same address can appear under several
     parents (joins, shared stubs), and each occurrence has its own
     ancestor chain.  Returns (loops, colored) where loops maps line idx
-    -> target addr and colored holds latch addresses plus every ancestor
-    up the chain as long as each has exactly one successor (the
+    -> target addr and colored holds the latch lines plus every ancestor
+    line up the chain as long as each has exactly one successor (the
     straight-line loop body).  Coloring stops at forks.
     """
     parent_idx = _parent_indices(lines)
@@ -196,27 +217,48 @@ def detect_loops(
                 loops[i] = s
                 break
     addrs = [ln[2] for ln in lines]
-    # Seed with single-successor latches only: a fork that happens to sit
-    # on a cycle still gets the arrow suffix, but not the loop color.
-    colored: Set[int] = set(
-        addrs[i] for i in loops if len(adj.get(addrs[i], [])) == 1
-    )
+    # Each set holds line indices (not addresses): the same block can
+    # appear under several parents with different loop membership.
+    # Seed with single-successor latches only: a fork that happens to
+    # sit on a cycle still gets the arrow suffix, but not the color.
+    colored: Set[int] = {i for i in loops if len(adj.get(addrs[i], [])) == 1}
     for i, tgt in loops.items():
         j = parent_idx[i]
         while j is not None:
-            a = addrs[j]
-            if a == tgt:
-                # The loop closes here: color the target only when it
-                # is itself straight-line; above it is outside the loop.
-                if len(adj.get(a, [])) == 1:
-                    colored.add(a)
+            # The loop closes at its target: color it only when it is
+            # itself straight-line; above it is outside the loop.
+            # A fork on the path is skipped but the walk continues up
+            # to the target.
+            if addrs[j] == tgt:
+                if len(adj.get(addrs[j], [])) == 1:
+                    colored.add(j)
                 break
-            # Only straight-line parents share the loop color; a fork
-            # is skipped but the walk continues up to the target.
-            if len(adj.get(a, [])) == 1:
-                colored.add(a)
+            if len(adj.get(addrs[j], [])) == 1:
+                colored.add(j)
             j = parent_idx[j]
     return loops, colored
+
+
+def sibling_line(lines: List[tuple], cursor: int, direction: int) -> Optional[int]:
+    """Line index of the sibling next to the cursor line, if displayed.
+
+    Matches on (level, sibling index) *and* the same parent address:
+    sibling indices repeat under every parent, so without the parent
+    check a jump from the second subtree lands in the first.
+    """
+    level, sib_idx, parent = lines[cursor][0], lines[cursor][1], lines[cursor][5]
+    want = sib_idx + direction
+    if want < 0:
+        return None
+    for li2, ln in enumerate(lines):
+        if ln[0] == level and ln[1] == want and ln[5] == parent:
+            return li2
+    return None
+
+
+def parent_line(lines: List[tuple], cursor: int) -> Optional[int]:
+    """Line index of the cursor line's true parent via the render order."""
+    return _parent_indices(lines)[cursor]
 
 
 def expand_with_ancestors(acc: Accordion, lines: List[tuple], li: int) -> None:
@@ -377,7 +419,11 @@ def _run_curses_ui(
         "COLOR_MAGENTA", "COLOR_BLUE", "COLOR_WHITE",
     )
 
+    loops_cache_key: Any = None
+    loops_cache_val: tuple = ({}, set())
+
     def draw(stdscr: Any) -> None:
+        nonlocal loops_cache_key, loops_cache_val
         curses.curs_set(0)
         stdscr.timeout(200)
         if curses.has_colors():
@@ -458,9 +504,19 @@ def _run_curses_ui(
                     )
             rows, cols = stdscr.getmaxyx()
             width = max(cols - 1, 10)
-            lines = render_lines(entry, adj, acc.expanded)
+            try:
+                lines = render_lines(entry, adj, acc.expanded, limit=_MAX_LINES)
+            except RecursionError:
+                # Degenerate deep chain: keep last good frame, say why.
+                status("tree too deep to render \u2014 fold branches")
             dead = compute_dead(adj, snap_data["visited"], snap_data["active"])
-            loops, loop_addrs = detect_loops(lines, adj)
+            loops_key = (id(adj), frozenset(acc.expanded))
+            if loops_key != loops_cache_key:
+                loops_cache_key = loops_key
+                loops_cache_val = detect_loops(lines, adj)
+            loops, loop_lines = loops_cache_val
+            if len(lines) >= _MAX_LINES:
+                status(f"tree too large \u2014 showing first {_MAX_LINES} rows")
             cursor = min(max(cursor, 0), max(len(lines) - 1, 0))
             stdscr.erase()
             elapsed = time.time() - started
@@ -478,13 +534,18 @@ def _run_curses_ui(
                 head += f" | in: {preview}"
             if snap_data["done"]:
                 head += "  DONE \u2014 any key to exit"
-            stdscr.addstr(0, 0, head[:width])
+            try:
+                stdscr.addstr(0, 0, head[:width])
+            except Exception:
+                pass
             keys = ("\u2191/\u2193 move  \u2190/\u2192 siblings  Enter expand  "
                     "Bksp fold  i input  [/] scroll  r reload  q")
-            stdscr.addstr(1, 0, keys[:width])
+            try:
+                stdscr.addstr(1, 0, keys[:width])
+            except Exception:
+                pass
             # Scroll so the cursor line is visible.
             first = max(0, min(cursor, len(lines) - (rows - 3)))
-            first = min(first, cursor)
             for vi, li in enumerate(range(first, len(lines))):
                 y = vi + 2
                 if y >= rows - 1:
@@ -492,8 +553,11 @@ def _run_curses_ui(
                 level, sib_idx, addr, last, cont, parent, branch = lines[li]
                 kids = adj.get(addr, [])
                 is_exp = bool(kids) and addr in acc.expanded
+                marks = _marks(addr, snap_data, finds, avoids)
+                if li in loop_lines:
+                    marks += "L"  # on a loop path (mono cue; red when colored)
                 text = format_line(
-                    addr, _marks(addr, snap_data, finds, avoids),
+                    addr, marks,
                     len(kids), is_exp, last, cont, 10**9,
                 )
                 if li in loops:
@@ -503,7 +567,7 @@ def _run_curses_ui(
                     stdscr.addstr(
                         y, 0, text, branch_attr(
                             branch, addr, li == cursor, addr in dead,
-                            addr in loop_addrs,
+                            li in loop_lines,
                         ),
                     )
                 except Exception:
@@ -544,14 +608,17 @@ def _run_curses_ui(
             if snap_data["done"]:
                 return
             if key == ord("r"):
-                status("rebuilding CFG\u2026")
-                stdscr.refresh()
-                entry, adj = build_graph(proj)
-                known = set(adj)
-                for kids in adj.values():
-                    known.update(kids)
-                acc.expanded.intersection_update(known)
-                status(f"graph reloaded: {len(adj)} blocks")
+                try:
+                    status("rebuilding CFG\u2026")
+                    stdscr.refresh()
+                    entry, adj = build_graph(proj)
+                    known = set(adj)
+                    for kids in adj.values():
+                        known.update(kids)
+                    acc.expanded.intersection_update(known)
+                    status(f"graph reloaded: {len(adj)} blocks")
+                except Exception as exc:
+                    status(f"reload failed: {exc}")
                 continue
             if key in (ord("["), ord("{")):
                 xoff = max(0, xoff - 8)
@@ -572,19 +639,13 @@ def _run_curses_ui(
             elif key in (curses.KEY_DOWN, ord("j")):
                 cursor = min(len(lines) - 1, cursor + 1)
             elif key in (curses.KEY_LEFT, ord("h")):
-                if sib_idx > 0:
-                    # relocate cursor to the sibling line
-                    for li2, ln in enumerate(lines):
-                        if ln[0] == level and ln[1] == sib_idx - 1:
-                            cursor = li2
-                            break
+                dest = sibling_line(lines, cursor, -1)
+                if dest is not None:
+                    cursor = dest
             elif key in (curses.KEY_RIGHT, ord("l")):
-                n_sibs = len(adj.get(parent, [addr])) if parent is not None else 1
-                if sib_idx + 1 < n_sibs:
-                    for li2, ln in enumerate(lines):
-                        if ln[0] == level and ln[1] == sib_idx + 1:
-                            cursor = li2
-                            break
+                dest = sibling_line(lines, cursor, +1)
+                if dest is not None:
+                    cursor = dest
             elif key in (curses.KEY_ENTER, 10, 13, ord(" ")):
                 kids = adj.get(addr, [])
                 if not kids:
@@ -604,18 +665,18 @@ def _run_curses_ui(
                 if key == ord("x") or addr in acc.expanded:
                     # fold this node itself (plus descendants), keep its
                     # siblings open
-                    acc.collapse_node(addr, adj)
+                    acc.collapse_node(entry, addr, adj)
                     lines = render_lines(entry, adj, acc.expanded)
                     for li2, ln in enumerate(lines):
                         if ln[2] == addr:
                             cursor = li2
                             break
                 elif level > 0:
-                    # already folded: move up to the parent
-                    for li2, ln in enumerate(lines):
-                        if ln[2] == parent:
-                            cursor = li2
-                            break
+                    # already folded: move up to the true parent line
+                    # (address scan would land on a duplicate repeat).
+                    dest = parent_line(lines, cursor)
+                    if dest is not None:
+                        cursor = dest
 
     import curses as _curses
 

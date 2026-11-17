@@ -10,7 +10,9 @@ from angrsolve.cfgview import (
     expand_with_ancestors,
     format_line,
     make_observer,
+    parent_line,
     render_lines,
+    sibling_line,
 )
 
 
@@ -33,8 +35,77 @@ def test_accordion_collapse_drops_descendants() -> None:
     acc = Accordion()
     acc.expand(0x1000)
     acc.expand(0x1100)
-    acc.collapse_node(0x1000, adj)
+    acc.collapse_node(0x1000, 0x1000, adj)
     assert acc.expanded == set()
+
+
+def test_accordion_collapse_keeps_shared_join() -> None:
+    # Diamond: folding left must not drop the join while it stays
+    # visible under right.
+    head, left, right, join = 0x1000, 0x1100, 0x1200, 0x1300
+    adj = {head: [left, right], left: [join], right: [join], join: []}
+    acc = Accordion()
+    for a in (head, left, right, join):
+        acc.expand(a)
+    acc.collapse_node(head, left, adj)
+    assert acc.expanded == {head, right, join}
+
+
+def test_accordion_collapse_keeps_cycle_reentry() -> None:
+    # Cycle head<->body: folding the body must not drop the head,
+    # which stays visible as the root.
+    head, body = 0x1000, 0x1100
+    adj = {head: [body], body: [head]}
+    acc = Accordion()
+    acc.expand(head)
+    acc.expand(body)
+    acc.collapse_node(head, body, adj)
+    assert acc.expanded == {head}
+
+
+def test_sibling_line_respects_parent() -> None:
+    # A1 and B1 share (level, sibling index); a jump from under B must
+    # land on a B line, never on the A subtree's child.
+    entry, adj = _graph()
+    acc = Accordion()
+    for a in (entry, 0x1100, 0x1200):
+        acc.expand(a)
+    lines = render_lines(entry, adj, acc.expanded)
+    # lines: entry, A, A1, B, B1 → B1 is line 4.
+    assert [ln[2] for ln in lines] == [entry, 0x1100, 0x1110, 0x1200, 0x1210]
+    # Both A1 and B1 are only children: no sibling in either subtree.
+    assert sibling_line(lines, 4, -1) is None
+    assert sibling_line(lines, 2, +1) is None
+
+
+def test_sibling_line_moves_within_same_parent() -> None:
+    entry = 0x1000
+    a, b, c = 0x1100, 0x1200, 0x1300
+    adj = {entry: [a, b, c], a: [], b: [], c: []}
+    acc = Accordion()
+    acc.expand(entry)
+    lines = render_lines(entry, adj, acc.expanded)
+    assert sibling_line(lines, 1, +1) == 2
+    assert sibling_line(lines, 2, +1) == 3
+    assert sibling_line(lines, 3, +1) is None
+    assert sibling_line(lines, 3, -1) == 2
+    assert sibling_line(lines, 1, -1) is None
+
+
+def test_parent_line_jumps_to_true_parent() -> None:
+    # Diamond: the join rendered under right must resolve to the
+    # right line, not to the first address match under left.
+    head, left, right, join = 0x1000, 0x1100, 0x1200, 0x1300
+    adj = {head: [left, right], left: [join], right: [join], join: []}
+    acc = Accordion()
+    for a in (head, left, right, join):
+        acc.expand(a)
+    lines = render_lines(head, adj, acc.expanded)
+    # lines: head, left, join, right, join → join-under-right is line 4.
+    assert [ln[2] for ln in lines] == [head, left, join, right, join]
+    assert parent_line(lines, 4) == 3
+    assert parent_line(lines, 2) == 1
+    assert parent_line(lines, 0) is None
 
 
 def test_accordion_collapse_keeps_siblings() -> None:
@@ -43,30 +114,22 @@ def test_accordion_collapse_keeps_siblings() -> None:
     acc.expand(entry)
     acc.expand(0x1100)
     acc.expand(0x1200)
-    acc.collapse_node(0x1100, adj)
+    acc.collapse_node(entry, 0x1100, adj)
     assert acc.expanded == {entry, 0x1200}
 
 
 def test_render_no_cross_subtree_leak() -> None:
-    # The bug: position-keyed flags let A1's expansion leak onto B1
-    # (same level + same sibling index, different parent).
+    # Strict expansion: a collapsed node's children appear nowhere until
+    # that exact node is expanded.  Expanding A must not reveal anything
+    # under B even though A1 and B1 share (level, sibling index).
     entry, adj = _graph()
     acc = Accordion()
     acc.expand(entry)
+    lines = render_lines(entry, adj, acc.expanded)
+    assert [ln[2] for ln in lines] == [entry, 0x1100, 0x1200]
     acc.expand(0x1100)
-    acc.expand(0x1110)  # A1
     lines = render_lines(entry, adj, acc.expanded)
-    by_addr = {ln[2]: ln for ln in lines}
-    assert 0x1210 in by_addr  # B1 visible (B expanded? no — B collapsed)
-    # B is folded, so B1 must appear as a collapsed child line even
-    # though it shares A1's (level, idx).
-    assert by_addr[0x1210][1] == 0
-    # Now expand B: B1 must NOT spring open from A1's flag... it will
-    # only open if B1 itself was expanded.
-    acc.expand(0x1200)
-    lines = render_lines(entry, adj, acc.expanded)
-    rows = [ln for ln in lines if ln[0] == 3]
-    assert rows == []  # no grandchildren visible under B1
+    assert [ln[2] for ln in lines] == [entry, 0x1100, 0x1110, 0x1200]
 
 
 def test_render_river_splits_and_continuation() -> None:
@@ -87,9 +150,12 @@ def test_render_river_splits_and_continuation() -> None:
 
 def test_render_collapsed_children_hidden() -> None:
     entry, adj = _graph()
-    lines = render_lines(entry, adj, set())
-    addrs = [ln[2] for ln in lines]
-    assert addrs == [entry, 0x1100, 0x1200]
+    # Nothing expanded: only the root line itself.
+    assert [ln[2] for ln in render_lines(entry, adj, set())] == [entry]
+    acc = Accordion()
+    acc.expand(entry)
+    lines = render_lines(entry, adj, acc.expanded)
+    assert [ln[2] for ln in lines] == [entry, 0x1100, 0x1200]
 
 
 def test_render_branch_ids_share_downstream_color() -> None:
@@ -120,12 +186,18 @@ def test_expand_with_ancestors_opens_chain() -> None:
     entry, adj = _graph()
     acc = Accordion()
     lines = render_lines(entry, adj, acc.expanded)
-    # A is the 2nd line (index 1); expanding it must open the root too.
-    expand_with_ancestors(acc, lines, 1)
-    assert acc.expanded == {0x1100, entry}
+    assert [ln[2] for ln in lines] == [entry]
+    # expanding the root reveals exactly its children, nothing deeper.
+    expand_with_ancestors(acc, lines, 0)
+    assert acc.expanded == {entry}
     lines = render_lines(entry, adj, acc.expanded)
-    assert 0x1110 in [ln[2] for ln in lines]
-    # A1 is now visible (index 2: entry, A, A1, B).
+    assert [ln[2] for ln in lines] == [entry, 0x1100, 0x1200]
+    # A is now visible (index 1); expanding it reveals exactly A1.
+    expand_with_ancestors(acc, lines, 1)
+    assert acc.expanded == {entry, 0x1100}
+    lines = render_lines(entry, adj, acc.expanded)
+    assert [ln[2] for ln in lines] == [entry, 0x1100, 0x1110, 0x1200]
+    # A1 is now visible (index 2); expanding it keeps the chain intact.
     expand_with_ancestors(acc, lines, 2)
     assert acc.expanded == {0x1110, 0x1100, entry}
 
@@ -157,11 +229,12 @@ def test_detect_loops_finds_latch_and_target() -> None:
         acc.expand(a)
     lines = render_lines(head, adj, acc.expanded)
     loops, colored = detect_loops(lines, adj)
-    # Every expanded occurrence on the cycle is a latch: the latch
-    # itself, the repeated head, and the repeated body under it.
-    assert loops == {2: head, 3: body, 4: latch}
-    # straight-line chain: latch + body + head all loop-colored.
-    assert colored == {latch, body, head}
+    addrs = [ln[2] for ln in lines]
+    # Behavioral, not index-pinned: latch→target pairs + full coloring.
+    assert {(addrs[i], tgt) for i, tgt in loops.items()} == {
+        (latch, head), (head, body),
+    }
+    assert {addrs[i] for i in colored} == {latch, body, head}
 
 
 def test_detect_loops_stops_coloring_at_fork() -> None:
@@ -177,10 +250,14 @@ def test_detect_loops_stops_coloring_at_fork() -> None:
         acc.expand(a)
     lines = render_lines(head, adj, acc.expanded)
     loops, colored = detect_loops(lines, adj)
-    # latch line index: head, mid, body, latch.
-    assert loops[3] == head
-    assert mid not in colored
-    assert colored == {latch, body, head}
+    addrs = [ln[2] for ln in lines]
+    # lines: head, mid, body, latch, head-repeat, side.
+    assert {(addrs[i], tgt) for i, tgt in loops.items()} == {
+        (latch, head), (head, mid),
+    }
+    addrs_colored = {addrs[i] for i in colored}
+    assert mid not in addrs_colored
+    assert addrs_colored == {latch, body, head}
 
 
 def test_detect_loops_no_false_positive_on_join() -> None:
@@ -202,9 +279,8 @@ def test_render_terminates_on_cycle() -> None:
     acc.expand(head)
     acc.expand(body)
     lines = render_lines(head, adj, acc.expanded)
-    # body rendered once; the repeated head is a collapsed leaf,
-    # and so is head's child listed under it.
-    assert [ln[2] for ln in lines] == [head, body, head, body]
+    # body rendered once; the repeated head is a bare leaf under it.
+    assert [ln[2] for ln in lines] == [head, body, head]
 
 
 def test_collapse_node_terminates_on_cycle() -> None:
@@ -217,7 +293,9 @@ def test_collapse_node_terminates_on_cycle() -> None:
     adj = {0x1000: [0x1100], 0x1100: [0x1000]}
     acc.expand(0x1000)
     acc.expand(0x1100)
-    t = threading.Thread(target=acc.collapse_node, args=(0x1000, adj))
+    t = threading.Thread(
+        target=acc.collapse_node, args=(0x1000, 0x1000, adj), daemon=True
+    )
     t.start()
     t.join(5.0)
     assert not t.is_alive()

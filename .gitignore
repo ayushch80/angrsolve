@@ -32,3 +32,4 @@ env/
 
 # Project-specific: compiled test binaries inside repo
 tests/*.exe
+unsolved_challenges/
